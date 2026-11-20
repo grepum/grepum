@@ -1,0 +1,349 @@
+{
+ "shopfront": {
+  "grepum": {
+   "cold": 0.08118745894171298,
+   "warm": 0.022546750027686357,
+   "edit": 0.032936583971604705,
+   "worktree_each": [
+    0.04407658288255334,
+    0.04128283401951194,
+    0.043419667053967714,
+    0.04252737504430115
+   ],
+   "worktrees_total": 0.17130645900033414,
+   "query": 0.022800125181674957,
+   "other_rev": 0.012143499916419387,
+   "disk": 501368,
+   "accuracy": {
+    "precision": 1.0,
+    "recall": 0.9943938332165382,
+    "f1": 0.9971890372452565,
+    "tp": 1419,
+    "fp": 0,
+    "fn": 8,
+    "hard": {
+     "untyped-param": [
+      0,
+      8
+     ]
+    },
+    "fp_examples": [],
+    "fn_examples": [
+     [
+      "src/api/routes/coupon.ts:7",
+      "src/domain/coupon/service.ts:41"
+     ],
+     [
+      "src/api/routes/label.ts:7",
+      "src/domain/label/service.ts:41"
+     ],
+     [
+      "src/api/routes/order.ts:7",
+      "src/domain/order/service.ts:41"
+     ],
+     [
+      "src/api/routes/plan.ts:7",
+      "src/domain/plan/service.ts:41"
+     ],
+     [
+      "src/api/routes/price.ts:7",
+      "src/domain/price/service.ts:41"
+     ]
+    ]
+   }
+  },
+  "graphify": {
+   "cold": 2.010013374965638,
+   "warm": 0.2352416249923408,
+   "edit": 1.8792300410568714,
+   "worktree_each": [
+    1.9991620001383126,
+    1.9890816251281649,
+    1.993443249957636,
+    1.995496666058898
+   ],
+   "worktrees_total": 7.977183541283011,
+   "query": 0.14360420918092132,
+   "disk": 13168367,
+   "accuracy": {
+    "precision": 1.0,
+    "recall": 0.7561317449194114,
+    "f1": 0.8611332801276935,
+    "tp": 1079,
+    "fp": 0,
+    "fn": 348,
+    "hard": {
+     "untyped-param": [
+      0,
+      8
+     ]
+    },
+    "fp_examples": [],
+    "fn_examples": [
+     [
+      "src/api/routes/audit.ts:7",
+      "src/domain/audit/service.ts:16"
+     ],
+     [
+      "src/api/routes/audit.ts:7",
+      "src/domain/audit/service.ts:28"
+     ],
+     [
+      "src/api/routes/audit.ts:7",
+      "src/domain/audit/service.ts:35"
+     ],
+     [
+      "src/api/routes/batch.ts:7",
+      "src/domain/batch/service.ts:16"
+     ],
+     [
+      "src/api/routes/batch.ts:7",
+      "src/domain/batch/service.ts:28"
+     ]
+    ]
+   }
+  }
+ },
+ "datapipe": {
+  "grepum": {
+   "cold": 0.0775408330373466,
+   "warm": 0.02471474977210164,
+   "edit": 0.035408583004027605,
+   "worktree_each": [
+    0.052727167028933764,
+    0.04045941587537527,
+    0.04268287494778633,
+    0.04142520809546113
+   ],
+   "worktrees_total": 0.1772946659475565,
+   "query": 0.022457166109234095,
+   "other_rev": 0.01211487501859665,
+   "disk": 547355,
+   "accuracy": {
+    "precision": 1.0,
+    "recall": 0.9929203539823008,
+    "f1": 0.9964476021314387,
+    "tp": 1683,
+    "fp": 0,
+    "fn": 12,
+    "hard": {
+     "super()": [
+      60,
+      60
+     ],
+     "untyped-param": [
+      0,
+      12
+     ],
+     "chained-call": [
+      60,
+      60
+     ]
+    },
+    "fp_examples": [],
+    "fn_examples": [
+     [
+      "datapipe/pipelines/coupon_pipeline.py:6",
+      "datapipe/stages/coupon_stage.py:13"
+     ],
+     [
+      "datapipe/pipelines/dashboard_pipeline.py:6",
+      "datapipe/stages/dashboard_stage.py:13"
+     ],
+     [
+      "datapipe/pipelines/device_pipeline.py:6",
+      "datapipe/stages/device_stage.py:13"
+     ],
+     [
+      "datapipe/pipelines/feature_pipeline.py:6",
+      "datapipe/stages/feature_stage.py:13"
+     ],
+     [
+      "datapipe/pipelines/label_pipeline.py:6",
+      "datapipe/stages/label_stage.py:13"
+     ]
+    ]
+   }
+  },
+  "graphify": {
+   "cold": 1.4110979170072824,
+   "warm": 0.23327225004322827,
+   "edit": 1.045430582948029,
+   "worktree_each": [
+    1.4080234579741955,
+    1.4086859999224544,
+    1.4007123329211026,
+    1.3991620829328895
+   ],
+   "worktrees_total": 5.616583873750642,
+   "query": 0.1445940830744803,
+   "disk": 21297817,
+   "accuracy": {
+    "precision": 1.0,
+    "recall": 0.9215339233038348,
+    "f1": 0.9591648756524408,
+    "tp": 1562,
+    "fp": 0,
+    "fn": 133,
+    "hard": {
+     "super()": [
+      60,
+      60
+     ],
+     "untyped-param": [
+      0,
+      12
+     ],
+     "chained-call": [
+      0,
+      60
+     ]
+    },
+    "fp_examples": [],
+    "fn_examples": [
+     [
+      "datapipe/core/pipeline.py:9",
+      "datapipe/core/registry.py:5"
+     ],
+     [
+      "datapipe/pipelines/address_pipeline.py:14",
+      "datapipe/connectors/salesforce.py:16"
+     ],
+     [
+      "datapipe/pipelines/address_pipeline.py:14",
+      "datapipe/core/pipeline.py:14"
+     ],
+     [
+      "datapipe/pipelines/alert_pipeline.py:14",
+      "datapipe/connectors/s3.py:16"
+     ],
+     [
+      "datapipe/pipelines/alert_pipeline.py:14",
+      "datapipe/core/pipeline.py:14"
+     ]
+    ]
+   }
+  }
+ },
+ "arena": {
+  "grepum": {
+   "cold": 0.06953912507742643,
+   "warm": 0.022117167012766004,
+   "edit": 0.03055962477810681,
+   "worktree_each": [
+    0.04300804203376174,
+    0.03896887484006584,
+    0.03873887495137751,
+    0.03860845789313316
+   ],
+   "worktrees_total": 0.15932424971833825,
+   "query": 0.02239020890556276,
+   "other_rev": 0.013967624865472317,
+   "disk": 296444,
+   "accuracy": {
+    "precision": 1.0,
+    "recall": 1.0,
+    "f1": 1.0,
+    "tp": 430,
+    "fp": 0,
+    "fn": 0,
+    "hard": {
+     "ue-rpc": [
+      27,
+      27
+     ],
+     "callback-binding": [
+      2,
+      2
+     ],
+     "chained-call": [
+      87,
+      87
+     ]
+    },
+    "fp_examples": [],
+    "fn_examples": []
+   }
+  },
+  "graphify": {
+   "cold": 1.5701990418601781,
+   "warm": 0.23146333289332688,
+   "edit": 1.564835124881938,
+   "worktree_each": [
+    1.5207229999359697,
+    1.5328450840897858,
+    1.5334089579991996,
+    1.5258930418640375
+   ],
+   "worktrees_total": 6.112870083888993,
+   "query": 0.1401437500026077,
+   "disk": 14734024,
+   "accuracy": {
+    "precision": 0.8656716417910447,
+    "recall": 0.4046511627906977,
+    "f1": 0.5515055467511886,
+    "tp": 174,
+    "fp": 27,
+    "fn": 256,
+    "hard": {
+     "ue-rpc": [
+      0,
+      27
+     ],
+     "callback-binding": [
+      0,
+      2
+     ],
+     "chained-call": [
+      0,
+      87
+     ]
+    },
+    "fp_examples": [
+     [
+      "Source/Arena/Private/Weapons/ArenaWeapon.cpp:12",
+      "Source/Arena/Public/Weapons/ArenaWeapon.h:24"
+     ],
+     [
+      "Source/Arena/Private/Weapons/ArenaWeapon.cpp:12",
+      "Source/Arena/Public/Weapons/ArenaWeapon.h:27"
+     ],
+     [
+      "Source/Arena/Private/Weapons/Blaster.cpp:10",
+      "Source/Arena/Public/Weapons/Blaster.h:18"
+     ],
+     [
+      "Source/Arena/Private/Weapons/Boomstick.cpp:10",
+      "Source/Arena/Public/Weapons/Boomstick.h:18"
+     ],
+     [
+      "Source/Arena/Private/Weapons/BurstRifle.cpp:10",
+      "Source/Arena/Public/Weapons/BurstRifle.h:18"
+     ]
+    ],
+    "fn_examples": [
+     [
+      "Source/Arena/Private/ArenaGameMode.cpp:13",
+      "Source/Arena/Private/Subsystems/ScoreSubsystem.cpp:17"
+     ],
+     [
+      "Source/Arena/Private/Characters/ArenaCharacter.cpp:15",
+      "Source/Arena/Private/Characters/ArenaCharacter.cpp:49"
+     ],
+     [
+      "Source/Arena/Private/Characters/ArenaCharacter.cpp:26",
+      "Source/Arena/Private/Characters/ArenaCharacter.cpp:35"
+     ],
+     [
+      "Source/Arena/Private/Characters/ArenaCharacter.cpp:35",
+      "Source/Arena/Private/Weapons/ArenaWeapon.cpp:12"
+     ],
+     [
+      "Source/Arena/Private/Characters/ArenaCharacter.cpp:49",
+      "Source/Arena/Private/Components/HealthComponent.cpp:31"
+     ]
+    ]
+   }
+  }
+ }
+}

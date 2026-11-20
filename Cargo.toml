@@ -1,0 +1,30 @@
+[package]
+name = "grepum"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "A code graph woven into git: content-addressed, shared across worktrees, queryable at any revision."
+
+[[bin]]
+name = "grepum"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+postcard = { version = "1", features = ["use-std"] }
+rayon = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+sha2 = "0.10"
+tree-sitter = "0.25"
+tree-sitter-cpp = "0.23"
+tree-sitter-go = "0.25"
+tree-sitter-javascript = "0.25"
+tree-sitter-python = "0.25"
+tree-sitter-rust = "0.24"
+tree-sitter-typescript = "0.23"
+
+[profile.release]
+lto = "thin"
+codegen-units = 4

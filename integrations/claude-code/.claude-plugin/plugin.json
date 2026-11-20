@@ -1,0 +1,6 @@
+{
+  "name": "grepum",
+  "version": "0.1.0",
+  "description": "Code graph woven into git: who-calls/what-calls/impact queries for Python, TS/JS, Rust, Go, C++ and Unreal Engine, shared across worktrees.",
+  "license": "MIT"
+}
