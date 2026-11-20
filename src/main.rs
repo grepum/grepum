@@ -7,6 +7,7 @@ mod history;
 mod html;
 mod install;
 mod lang;
+mod outline;
 mod query;
 mod show;
 mod snapshot;
@@ -103,6 +104,20 @@ enum Cmd {
         #[arg(short = 'n', long, default_value_t = 10)]
         limit: usize,
     },
+    /// Table of contents of files, directories or types: each definition's line range,
+    /// signature and caller count, without bodies. Pick one, then `show path:line`.
+    Outline {
+        /// Files, directories, `path:line`s (`rg -n` output), symbols (a type lists its
+        /// members), or `-` for stdin.
+        #[arg(required = true)]
+        targets: Vec<String>,
+        /// Nesting levels to show (1 = top level only); 0 shows all.
+        #[arg(short = 'd', long, default_value_t = 0)]
+        depth: usize,
+        /// Most definitions one name may expand to.
+        #[arg(short = 'n', long, default_value_t = 10)]
+        limit: usize,
+    },
     /// Compact neighbourhood of the best matches, sized for an agent prompt.
     Context {
         query: Vec<String>,
@@ -188,6 +203,20 @@ fn snapshot(repo: &Repo, store: &Store, rev: Option<&str>, rebuild: bool) -> Res
         Some(r) => snapshot::for_rev(repo, store, r, rebuild),
         None => snapshot::for_worktree(repo, store, rebuild),
     }
+}
+
+/// Targets with `-` replaced by the non-empty lines of stdin, and whether stdin was read.
+fn with_stdin(targets: Vec<String>) -> (Vec<String>, bool) {
+    let piped = targets.iter().any(|t| t == "-");
+    let mut args = vec![];
+    for t in targets {
+        if t == "-" {
+            args.extend(std::io::stdin().lines().map_while(|l| l.ok()).filter(|l| !l.trim().is_empty()));
+        } else {
+            args.push(t);
+        }
+    }
+    (args, piped)
 }
 
 /// Deleted symbols ranked by how well their names match the query words.
@@ -438,15 +467,7 @@ fn main() -> Result<()> {
         }
         Cmd::Show { targets, max_lines, no_line_numbers, callees, limit } => {
             let s = snapshot(&repo, &store, rev, false)?;
-            let piped = targets.iter().any(|t| t == "-");
-            let mut args = vec![];
-            for t in targets {
-                if t == "-" {
-                    args.extend(std::io::stdin().lines().map_while(|l| l.ok()).filter(|l| !l.trim().is_empty()));
-                } else {
-                    args.push(t);
-                }
-            }
+            let (args, piped) = with_stdin(targets);
             let toplevel = repo.toplevel.to_string_lossy().replace('\\', "/");
             let (picked, missing) = show::targets(&s.graph, &toplevel, &args, limit);
             if !piped {
@@ -464,6 +485,27 @@ fn main() -> Result<()> {
                 print_json(&show::json(&s.graph, &mut src, &picked, &opts));
             } else {
                 show::print(&s.graph, &mut src, &picked, &opts);
+            }
+        }
+        Cmd::Outline { targets, depth, limit } => {
+            let s = snapshot(&repo, &store, rev, false)?;
+            let (args, piped) = with_stdin(targets);
+            let toplevel = repo.toplevel.to_string_lossy().replace('\\', "/");
+            let (sections, missing) = outline::targets(&s.graph, &toplevel, &args, limit);
+            if !piped {
+                for m in &missing {
+                    eprintln!("grepum: no file, directory or symbol {m:?}");
+                }
+            }
+            if sections.is_empty() {
+                bail!("nothing to outline (try `grepum find <words>`)");
+            }
+            let opts = outline::Options { depth };
+            let mut src = show::Source::new(&repo, rev);
+            if cli.json {
+                print_json(&outline::json(&s.graph, &mut src, &sections, &opts));
+            } else {
+                outline::print(&s.graph, &mut src, &sections, &opts);
             }
         }
         Cmd::Context { query, symbols } => {

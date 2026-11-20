@@ -16,6 +16,7 @@ including uncommitted edits**. There is no index step to remember.
 | Where is something? | `grepum find <words>`: ranked; `order service`, `apply damage` |
 | Who calls it? | `grepum callers <Symbol>` (`--depth 3` for transitive impact) |
 | What does it call? | `grepum callees <Symbol>` |
+| What is in this file / class / directory? | `grepum outline <path\|dir\|Type>`: one line per definition with its signature, line range and caller count, no bodies; `-d 1` for top level only. Pick one, then `grepum show path:line` |
 | Read its code | `grepum show <Symbol>`: exactly the function's body plus its doc comment and decorators; `--callees` adds what it calls; `grepum callers X \| grepum show -` reads every caller |
 | Orient on a feature | `grepum context <words>`: matches plus 1-hop callers and callees |
 | What did this branch change? | `grepum diff main`: symbols and call edges added or removed |
@@ -31,7 +32,9 @@ output.
 
 1. Start with `find` or `context` to locate the code. Don't grep for
    identifiers the graph can resolve.
-2. Read the code with `grepum show <Symbol>` (or pipe `find`/`callers`
+2. Before opening a file to find your way around it, `grepum outline <file>`
+   (or a directory, or a type to list its members wherever they're written).
+   Read the code with `grepum show <Symbol>` (or pipe `find`/`callers`
    output into `grepum show -`) instead of opening whole files. Long
    functions are cut to their start and end; `--max-lines 0` shows all.
    `rg -n <pattern> . | grepum show -` shows the functions around text matches.

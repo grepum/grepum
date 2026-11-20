@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+- **`grepum outline <file|dir|Type>`**: a table of contents. One line per
+  definition with its line range, its signature (the source up to its body,
+  on one line) and how many places call it; no bodies. A type lists its
+  members wherever they're written (Rust `impl` blocks in other files, C++
+  out-of-line methods, Go receivers). Methods in an `impl`/`namespace` block
+  sit under that block's header; function-local definitions are left out.
+  `-d 1` shows the top level only, `-` reads files from stdin (`rg -n`/`rg -l`
+  output), `--json` for tools. On hono, `outline src` is 14x smaller than the
+  source it describes.
+
 ## 0.4.0
 
 - **`grepum show <symbol>`** prints a definition's source, exactly as far as

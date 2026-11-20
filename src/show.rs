@@ -15,7 +15,7 @@ use crate::lang;
 use crate::query;
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
-use tree_sitter::{Node, Point};
+use tree_sitter::{Node, Point, Tree};
 
 pub struct Options {
     /// 0 = no limit. Longer definitions keep their start and end.
@@ -40,7 +40,7 @@ impl<'r> Source<'r> {
         Source { repo, from_git: rev.is_some(), cache: HashMap::new() }
     }
 
-    fn read(&mut self, g: &Graph, file: u32) -> Option<&Vec<u8>> {
+    pub(crate) fn read(&mut self, g: &Graph, file: u32) -> Option<&Vec<u8>> {
         if !self.cache.contains_key(&file) {
             let f = &g.files[file as usize];
             let bytes = if self.from_git {
@@ -178,19 +178,12 @@ fn extent(lang: Lang, raw: &[u8], lines: &[&str], line: u32, end_line: u32) -> (
     let (tree, rewritten) = extract::parse(lang, raw);
     let Some(tree) = tree else { return (line, end_line) };
     let parsed = rewritten.as_deref().unwrap_or(raw);
-    let parsed_lines: Vec<&[u8]> = parsed.split(|b| *b == b'\n').collect();
+    let parsed_lines = split_lines(parsed);
     let row = (line - 1) as usize;
     let end_row = (end_line - 1) as usize;
-    let indent = |r: usize| parsed_lines.get(r).map(|l| l.iter().take_while(|b| b.is_ascii_whitespace()).count()).unwrap_or(0);
-    let last_col = parsed_lines.get(end_row).map(|l| l.iter().rposition(|b| !b.is_ascii_whitespace()).unwrap_or(0)).unwrap_or(0);
-    let Some(mut n) = tree.root_node().descendant_for_point_range(Point::new(row, indent(row)), Point::new(end_row, last_col))
-    else {
-        return (line, end_line);
-    };
-    // The outermost node with this span, then the wrappers that own it.
-    while let Some(p) = n.parent().filter(|p| p.start_byte() == n.start_byte() && p.end_byte() == n.end_byte() && p.parent().is_some()) {
-        n = p;
-    }
+    let indent = |r: usize| indent_of(&parsed_lines, r);
+    let Some(mut n) = def_node(&tree, &parsed_lines, line, end_line) else { return (line, end_line) };
+    // ...then the wrappers that own it.
     while let Some(p) = n.parent().filter(|p| support.wrapper_kinds().contains(&p.kind())) {
         n = p;
     }
@@ -216,6 +209,27 @@ fn extent(lang: Lang, raw: &[u8], lines: &[&str], line: u32, end_line: u32) -> (
         }
     }
     (start as u32 + 1, end as u32 + 1)
+}
+
+pub(crate) fn split_lines(src: &[u8]) -> Vec<&[u8]> {
+    src.split(|b| *b == b'\n').collect()
+}
+
+fn indent_of(lines: &[&[u8]], row: usize) -> usize {
+    lines.get(row).map(|l| l.iter().take_while(|b| b.is_ascii_whitespace()).count()).unwrap_or(0)
+}
+
+/// The outermost syntax node spanning a definition's lines (from its first
+/// non-blank column to its last), before any wrapper.
+pub(crate) fn def_node<'t>(tree: &'t Tree, lines: &[&[u8]], line: u32, end_line: u32) -> Option<Node<'t>> {
+    let row = line.checked_sub(1)? as usize;
+    let end_row = (end_line.max(line) - 1) as usize;
+    let last_col = lines.get(end_row).map(|l| l.iter().rposition(|b| !b.is_ascii_whitespace()).unwrap_or(0)).unwrap_or(0);
+    let mut n = tree.root_node().descendant_for_point_range(Point::new(row, indent_of(lines, row)), Point::new(end_row, last_col))?;
+    while let Some(p) = n.parent().filter(|p| p.start_byte() == n.start_byte() && p.end_byte() == n.end_byte() && p.parent().is_some()) {
+        n = p;
+    }
+    Some(n)
 }
 
 /// Definitions to print: the targets, then (with `--callees`) what each calls.
