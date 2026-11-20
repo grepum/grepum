@@ -57,6 +57,16 @@ pub enum Change {
     Deleted(String),
 }
 
+/// Git prints `C:/x/y` on Windows; use the platform separator so paths we
+/// join onto it don't come out mixed (`C:/x/.git\\grepum`).
+fn native(p: &str) -> PathBuf {
+    if cfg!(windows) {
+        PathBuf::from(p.replace('/', "\\"))
+    } else {
+        PathBuf::from(p)
+    }
+}
+
 fn git(cwd: &Path) -> Command {
     let mut c = Command::new("git");
     c.current_dir(cwd);
@@ -92,9 +102,9 @@ impl Repo {
         ]))
         .context("not inside a git worktree")?;
         let mut lines = out.lines();
-        let toplevel = PathBuf::from(lines.next().unwrap_or_default());
-        let common_dir = PathBuf::from(lines.next().unwrap_or_default());
-        let git_dir = PathBuf::from(lines.next().unwrap_or_default());
+        let toplevel = native(lines.next().unwrap_or_default());
+        let common_dir = native(lines.next().unwrap_or_default());
+        let git_dir = native(lines.next().unwrap_or_default());
         Ok(Repo { toplevel, common_dir, git_dir })
     }
 
@@ -276,6 +286,6 @@ impl Repo {
 
     pub fn hooks_dir(&self) -> Result<PathBuf> {
         let p = run_str(self.cmd().args(["rev-parse", "--path-format=absolute", "--git-path", "hooks"]))?;
-        Ok(PathBuf::from(p))
+        Ok(native(&p))
     }
 }

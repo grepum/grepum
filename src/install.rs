@@ -47,14 +47,46 @@ pub fn claude_dir(scope: Scope, cwd: &Path) -> Result<PathBuf> {
 /// Hook command. The binary's absolute path makes the hook independent of the
 /// PATH Claude Code's shell happens to get; the guard keeps it silent if the
 /// binary is later removed.
-fn hook_command() -> String {
-    let exe = std::env::current_exe()
-        .ok()
-        .and_then(|p| p.canonicalize().ok())
-        .map(|p| p.to_string_lossy().to_string())
-        .unwrap_or_else(|| "grepum".into());
-    let q = format!("'{}'", exe.replace('\'', r"'\''"));
-    format!("[ -x {q} ] && {q} summary 2>/dev/null || true")
+/// Portable: finds grepum on PATH. Used for project scope, whose settings.json
+/// is committed and shared, so it must not contain this machine's paths.
+const PATH_HOOK: &str = "command -v grepum >/dev/null 2>&1 && grepum summary 2>/dev/null || true";
+
+/// The SessionStart command. User scope pins this binary (so it works even if
+/// PATH isn't set up for Claude Code) and falls back to PATH; project scope
+/// only uses PATH.
+fn hook_command(scope: Scope) -> String {
+    if scope == Scope::Project {
+        return PATH_HOOK.to_string();
+    }
+    let Some(exe) = std::env::current_exe().ok().and_then(|p| p.canonicalize().ok()) else {
+        return PATH_HOOK.to_string();
+    };
+    let q = sh_quote(&bash_path(&exe.to_string_lossy()));
+    format!("if [ -x {q} ]; then {q} summary 2>/dev/null; else {PATH_HOOK}; fi; true")
+}
+
+/// A path as bash sees it. Claude Code runs hooks through bash (Git Bash on
+/// Windows), which can't use verbatim `\\?\C:\...` paths: strip the prefix
+/// and turn `C:\a\b` into `/c/a/b`. Unix paths pass through unchanged.
+fn bash_path(p: &str) -> String {
+    let p = if let Some(rest) = p.strip_prefix(r"\\?\UNC\") {
+        format!(r"\\{rest}")
+    } else {
+        p.strip_prefix(r"\\?\").unwrap_or(p).to_string()
+    };
+    let b = p.as_bytes();
+    if b.len() >= 2 && b[0].is_ascii_alphabetic() && b[1] == b':' {
+        let rest = p[2..].replace('\\', "/");
+        return format!("/{}{}", (b[0] as char).to_ascii_lowercase(), if rest.starts_with('/') { rest } else { format!("/{rest}") });
+    }
+    if p.starts_with(r"\\") {
+        return p.replace('\\', "/"); // UNC share: //server/share/...
+    }
+    p
+}
+
+fn sh_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', r"'\''"))
 }
 
 fn is_our_hook(entry: &Value) -> bool {
@@ -171,7 +203,7 @@ pub fn install_claude(cwd: &Path, opts: &Options) -> Result<()> {
     strip_hook(&mut settings);
     let entry = json!({
         "matcher": HOOK_MATCHER,
-        "hooks": [{"type": "command", "command": hook_command(), "timeout": 30}]
+        "hooks": [{"type": "command", "command": hook_command(opts.scope), "timeout": 30}]
     });
     let obj = settings.as_object_mut().unwrap();
     let hooks = obj.entry("hooks").or_insert_with(|| json!({}));
@@ -245,6 +277,22 @@ pub fn uninstall_claude(cwd: &Path, opts: &Options) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bash_paths() {
+        assert_eq!(bash_path(r"\\?\C:\Users\me\.local\bin\grepum.exe"), "/c/Users/me/.local/bin/grepum.exe");
+        assert_eq!(bash_path(r"C:\tools\grepum.exe"), "/c/tools/grepum.exe");
+        assert_eq!(bash_path(r"\\?\UNC\srv\share\grepum.exe"), "//srv/share/grepum.exe");
+        assert_eq!(bash_path("/usr/local/bin/grepum"), "/usr/local/bin/grepum");
+        assert_eq!(sh_quote("/a/it's"), r"'/a/it'\''s'");
+    }
+
+    #[test]
+    fn project_hook_has_no_machine_paths() {
+        assert_eq!(hook_command(Scope::Project), PATH_HOOK);
+        let user = hook_command(Scope::User);
+        assert!(!user.contains(r"\\?\") && !user.contains('\\'), "{user}");
+    }
 
     #[test]
     fn merge_keeps_foreign_hooks_and_is_idempotent() {
