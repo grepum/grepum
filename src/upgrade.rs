@@ -82,7 +82,7 @@ fn managed_elsewhere(dir: &Path) -> Option<&'static str> {
         .or_else(|| home().map(|h| h.join(".cargo")))
         .map(|c| c.join("bin"));
     if cargo_bin.and_then(|c| c.canonicalize().ok()).as_deref() == Some(dir) {
-        return Some("cargo install grepum --locked --force");
+        return Some("git pull && ./install.sh --from-source");
     }
     None
 }
