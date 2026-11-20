@@ -3,6 +3,7 @@ mod facts;
 mod git;
 mod graph;
 mod history;
+mod html;
 mod install;
 mod query;
 mod snapshot;
@@ -124,6 +125,17 @@ enum Cmd {
         /// Install even into a hooks directory that is part of the working tree.
         #[arg(long)]
         force: bool,
+    },
+    /// Write a self-contained HTML page to explore the graph (map + call neighbourhoods).
+    Html {
+        /// Open this symbol's call neighbourhood first.
+        symbol: Option<String>,
+        /// Where to write the page (default: inside this worktree's git dir).
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+        /// Open it in the default browser.
+        #[arg(long)]
+        open: bool,
     },
     /// Delete all cached data for this repository.
     Clear,
@@ -541,6 +553,24 @@ fn main() -> Result<()> {
         Cmd::Export => {
             let s = snapshot(&repo, &store, rev, false)?;
             println!("{}", serde_json::to_string(&query::export(&s.graph))?);
+        }
+        Cmd::Html { symbol, output, open } => {
+            let s = snapshot(&repo, &store, rev, false)?;
+            let page = html::render(&s.graph, &s.label)?;
+            let path = output.unwrap_or_else(|| store.local.join("graph.html"));
+            if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
+                std::fs::create_dir_all(dir)?;
+            }
+            std::fs::write(&path, page)?;
+            let path = path.canonicalize().unwrap_or(path);
+            let frag = symbol.map(|sym| format!("#focus={}", sym.replace('%', "%25").replace(' ', "%20").replace('#', "%23"))).unwrap_or_default();
+            let shown = path.display().to_string();
+            let shown = shown.strip_prefix(r"\\?\").unwrap_or(&shown).replace('\\', "/");
+            println!("wrote {} ({:.0} KiB)", path.display(), std::fs::metadata(&path)?.len() as f64 / 1024.0);
+            println!("file://{}{}{frag}", if shown.starts_with('/') { "" } else { "/" }, shown);
+            if open {
+                html::open(&path);
+            }
         }
         Cmd::Hooks { action, force } => hooks(&repo, action == "install", force)?,
         Cmd::Facts { .. } | Cmd::Upgrade { .. } => unreachable!(),

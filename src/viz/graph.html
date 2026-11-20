@@ -1,0 +1,403 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>grepum graph</title>
+<style>
+:root {
+  color-scheme: light;
+  --page: #f9f9f7; --surface: #fcfcfb; --ink: #0b0b0b; --ink2: #52514e; --muted: #898781;
+  --line: #e1e0d9; --axis: #c3c2b7; --accent: #2a78d6; --accent-wash: rgba(42,120,214,.10);
+  --edge: rgba(82,81,78,.28); --edge-hot: #2a78d6;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --page: #0d0d0d; --surface: #1a1a19; --ink: #f0efec; --ink2: #c3c2b7; --muted: #898781;
+    --line: #2c2c2a; --axis: #383835; --accent: #3987e5; --accent-wash: rgba(57,135,229,.14);
+    --edge: rgba(195,194,183,.22); --edge-hot: #3987e5;
+  }
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; }
+body {
+  font: 13px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; color: var(--ink); background: var(--page);
+  display: grid; grid-template-columns: 320px 1fr; grid-template-rows: auto 1fr; height: 100vh;
+}
+header {
+  grid-column: 1 / -1; display: flex; align-items: baseline; gap: 14px; padding: 12px 18px;
+  border-bottom: 1px solid var(--line); background: var(--surface);
+}
+header b { font-size: 15px; }
+header .meta { color: var(--muted); }
+header nav { margin-left: auto; display: flex; gap: 4px; }
+header nav a {
+  color: var(--ink2); text-decoration: none; padding: 4px 10px; border-radius: 6px;
+}
+header nav a.on { background: var(--accent-wash); color: var(--accent); font-weight: 600; }
+aside {
+  border-right: 1px solid var(--line); background: var(--surface); overflow: auto; padding: 14px;
+  display: flex; flex-direction: column; gap: 12px;
+}
+input[type=search] {
+  width: 100%; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--axis);
+  background: var(--page); color: var(--ink); font: inherit;
+}
+input[type=search]:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+ul { list-style: none; margin: 0; padding: 0; }
+li.item {
+  display: flex; gap: 8px; align-items: baseline; padding: 5px 6px; border-radius: 6px; cursor: pointer;
+}
+li.item:hover, li.item:focus { background: var(--accent-wash); outline: none; }
+.kind { color: var(--muted); font-size: 11px; min-width: 44px; }
+.qual { overflow-wrap: anywhere; }
+.loc { color: var(--muted); font-size: 11px; overflow-wrap: anywhere; }
+h2 { font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); margin: 6px 0 4px; font-weight: 600; }
+h1 { font-size: 16px; margin: 0; overflow-wrap: anywhere; }
+.swatch { display: inline-block; width: 10px; height: 10px; border-radius: 3px; flex: none; }
+main { position: relative; overflow: hidden; }
+svg { width: 100%; height: 100%; display: block; cursor: grab; user-select: none; }
+svg.dragging { cursor: grabbing; }
+svg text { font: 12px system-ui, -apple-system, "Segoe UI", sans-serif; fill: var(--ink); }
+svg .sub { fill: var(--muted); font-size: 11px; }
+svg .node { cursor: pointer; }
+svg .node rect.card { fill: var(--surface); stroke: var(--line); }
+svg .node:hover rect.card { stroke: var(--accent); }
+svg .node.center rect.card { stroke: var(--accent); stroke-width: 2; }
+svg path.edge { fill: none; stroke: var(--edge); stroke-width: 1.2; }
+svg path.edge.hot { stroke: var(--edge-hot); stroke-width: 2; }
+svg line.edge { stroke: var(--edge); }
+svg circle.group { stroke: var(--surface); stroke-width: 2; cursor: pointer; }
+svg text.halo { paint-order: stroke; stroke: var(--page); stroke-width: 4px; stroke-linejoin: round; }
+svg .colhead { fill: var(--muted); font-size: 11px; letter-spacing: .06em; text-transform: uppercase; }
+#legend {
+  position: absolute; left: 14px; bottom: 12px; display: flex; flex-wrap: wrap; gap: 6px 14px; max-width: 70%;
+  background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; color: var(--ink2);
+}
+#legend span { display: inline-flex; gap: 6px; align-items: center; }
+#tip {
+  position: absolute; pointer-events: none; background: var(--surface); border: 1px solid var(--line); color: var(--ink);
+  border-radius: 8px; padding: 6px 9px; box-shadow: 0 4px 16px rgba(0,0,0,.12); display: none; max-width: 420px;
+}
+#hint { position: absolute; right: 14px; bottom: 12px; color: var(--muted); }
+.empty { color: var(--muted); }
+</style>
+</head>
+<body>
+<header>
+  <b>grepum</b><span id="label" class="meta"></span>
+  <nav><a href="#map" id="tab-map">Map</a><a href="#" id="tab-focus">Focus</a></nav>
+</header>
+<aside>
+  <input id="q" type="search" placeholder="Find a symbol…" autocomplete="off" spellcheck="false" aria-label="Find a symbol">
+  <ul id="results"></ul>
+  <section id="detail"></section>
+</aside>
+<main>
+  <svg id="canvas" role="img" aria-label="code graph"><g id="viewport"></g></svg>
+  <div id="legend"></div>
+  <div id="tip"></div>
+  <div id="hint">scroll to zoom · drag to pan · click to focus</div>
+</main>
+<script id="data" type="application/json">/*__GREPUM_DATA__*/</script>
+<script>
+"use strict";
+const D = JSON.parse(document.getElementById("data").textContent);
+const N = D.defs.length;
+const qual = i => D.defs[i][0], kindOf = i => D.kinds[D.defs[i][1]];
+const fileOf = i => D.files[D.defs[i][2]], lineOf = i => D.defs[i][3];
+const callers = Array.from({ length: N }, () => []), callees = Array.from({ length: N }, () => []);
+for (let k = 0; k < D.calls.length; k += 2) { const a = D.calls[k], b = D.calls[k + 1]; callees[a].push(b); callers[b].push(a); }
+const bases = Array.from({ length: N }, () => []);
+for (let k = 0; k < D.inherits.length; k += 2) bases[D.inherits[k]].push(D.inherits[k + 1]);
+
+// ---- groups: folders at a depth that gives a readable number of them
+function groupAt(path, depth) { const p = path.split("/"); p.pop(); return p.slice(0, depth).join("/") || "(root)"; }
+let depth = 1;
+for (; depth < 4; depth++) if (new Set(D.files.map(f => groupAt(f, depth))).size >= 8) break;
+const fileGroup = D.files.map(f => groupAt(f, depth));
+const groupNames = [...new Set(fileGroup)];
+const gIndex = new Map(groupNames.map((g, i) => [g, i]));
+const groupOfDef = i => gIndex.get(fileGroup[D.defs[i][2]]);
+const gSize = groupNames.map(() => 0);
+for (let i = 0; i < N; i++) gSize[groupOfDef(i)]++;
+// Categorical palette in fixed order (validated light/dark pair); the tail folds into "other".
+const dark = matchMedia("(prefers-color-scheme: dark)").matches;
+const PALETTE = dark
+  ? ["#3987e5", "#d95926", "#199e70", "#c98500", "#d55181", "#008300", "#9085e9"]
+  : ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#6250d6"];
+const OTHER = dark ? "#5f5e59" : "#b5b4ad";
+const ranked = groupNames.map((_, i) => i).sort((a, b) => gSize[b] - gSize[a]);
+const gColor = groupNames.map(() => OTHER);
+ranked.slice(0, PALETTE.length).forEach((g, k) => gColor[g] = PALETTE[k]);
+const colorOf = i => gColor[groupOfDef(i)];
+
+document.getElementById("label").textContent =
+  `${D.label} · ${D.files.length} files · ${N} symbols · ${D.calls.length / 2} calls`;
+
+// ---- svg helpers, pan and zoom
+const NS = "http://www.w3.org/2000/svg";
+const svg = document.getElementById("canvas"), vp = document.getElementById("viewport");
+function el(tag, attrs, parent) {
+  const e = document.createElementNS(NS, tag);
+  for (const k in attrs) e.setAttribute(k, attrs[k]);
+  (parent || vp).appendChild(e);
+  return e;
+}
+let view = { x: 0, y: 0, k: 1 };
+const applyView = () => vp.setAttribute("transform", `translate(${view.x},${view.y}) scale(${view.k})`);
+function fit(box) {
+  // Keep clear of the legend at the bottom.
+  const r = svg.getBoundingClientRect(), pad = 40, bottom = 80;
+  const k = Math.min(1.4, (r.width - pad * 2) / Math.max(box.w, 1), (r.height - pad - bottom) / Math.max(box.h, 1));
+  view = { k, x: r.width / 2 - (box.x + box.w / 2) * k, y: (r.height - bottom + pad) / 2 - (box.y + box.h / 2) * k };
+  applyView();
+}
+svg.addEventListener("wheel", e => {
+  e.preventDefault();
+  const r = svg.getBoundingClientRect(), mx = e.clientX - r.left, my = e.clientY - r.top;
+  const f = Math.exp(-e.deltaY * 0.0015), k = Math.min(4, Math.max(0.1, view.k * f));
+  view.x = mx - (mx - view.x) * (k / view.k); view.y = my - (my - view.y) * (k / view.k); view.k = k;
+  applyView();
+}, { passive: false });
+let drag = null;
+svg.addEventListener("pointerdown", e => { drag = { x: e.clientX, y: e.clientY, vx: view.x, vy: view.y, moved: false }; });
+addEventListener("pointermove", e => {
+  if (!drag) return;
+  const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
+  if (Math.abs(dx) + Math.abs(dy) > 3) { drag.moved = true; svg.classList.add("dragging"); }
+  view.x = drag.vx + dx; view.y = drag.vy + dy; applyView();
+});
+addEventListener("pointerup", () => { setTimeout(() => drag = null, 0); svg.classList.remove("dragging"); });
+const clicked = fn => e => { if (drag && drag.moved) return; fn(e); };
+
+const tip = document.getElementById("tip");
+function showTip(e, html) {
+  tip.innerHTML = html; tip.style.display = "block";
+  const r = svg.getBoundingClientRect();
+  tip.style.left = Math.min(e.clientX - r.left + 14, r.width - 300) + "px";
+  tip.style.top = (e.clientY - r.top + 14) + "px";
+}
+const hideTip = () => tip.style.display = "none";
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const short = (s, n) => s.length > n ? "…" + s.slice(s.length - n + 1) : s;
+
+function legend(entries) {
+  const L = document.getElementById("legend");
+  L.innerHTML = entries.map(([c, t]) => `<span><i class="swatch" style="background:${c}"></i>${esc(t)}</span>`).join("");
+}
+function groupLegend(used) {
+  const top = ranked.slice(0, PALETTE.length).filter(g => !used || used.has(g));
+  const rest = used ? [...used].some(g => gColor[g] === OTHER) : ranked.length > PALETTE.length;
+  legend(top.map(g => [gColor[g], groupNames[g]]).concat(rest ? [[OTHER, "other folders"]] : []));
+}
+
+// ---- sidebar
+function item(i) {
+  const li = document.createElement("li");
+  li.className = "item"; li.tabIndex = 0;
+  li.innerHTML = `<i class="swatch" style="background:${colorOf(i)}"></i><span class="kind">${kindOf(i)}</span>` +
+    `<span><span class="qual">${esc(qual(i))}</span><br><span class="loc">${esc(fileOf(i))}:${lineOf(i)}</span></span>`;
+  li.onclick = () => location.hash = "focus=" + encodeURIComponent(qual(i));
+  li.onkeydown = e => { if (e.key === "Enter") li.onclick(); };
+  return li;
+}
+function list(title, ids, max) {
+  const s = document.createElement("div");
+  const uniq = [...new Set(ids)].sort((a, b) => callers[b].length - callers[a].length);
+  s.innerHTML = `<h2>${title} · ${uniq.length}</h2>`;
+  const ul = document.createElement("ul");
+  if (!uniq.length) ul.innerHTML = `<li class="empty">none</li>`;
+  uniq.slice(0, max).forEach(i => ul.appendChild(item(i)));
+  if (uniq.length > max) ul.insertAdjacentHTML("beforeend", `<li class="empty">+ ${uniq.length - max} more</li>`);
+  s.appendChild(ul);
+  return s;
+}
+function showDetail(i) {
+  const d = document.getElementById("detail");
+  d.innerHTML = `<h2>${kindOf(i)}</h2><h1>${esc(qual(i))}</h1><div class="loc">${esc(fileOf(i))}:${lineOf(i)}</div>`;
+  if (bases[i].length) d.appendChild(list("Inherits from", bases[i], 20));
+  d.appendChild(list("Called by", callers[i], 200));
+  d.appendChild(list("Calls", callees[i], 200));
+}
+
+const lower = D.defs.map(d => d[0].toLowerCase());
+const q = document.getElementById("q");
+q.addEventListener("input", () => {
+  const ul = document.getElementById("results"); ul.innerHTML = "";
+  const toks = q.value.toLowerCase().split(/[\s.:]+/).filter(Boolean);
+  if (!toks.length) return;
+  const hits = [];
+  for (let i = 0; i < N; i++) {
+    if (!toks.every(t => lower[i].includes(t))) continue;
+    const name = lower[i].split(".").pop();
+    const score = (name === toks[toks.length - 1] ? 1000 : 0) + (lower[i] === toks.join(".") ? 2000 : 0) + callers[i].length;
+    hits.push([score, i]);
+  }
+  hits.sort((a, b) => b[0] - a[0]);
+  hits.slice(0, 40).forEach(([, i]) => ul.appendChild(item(i)));
+  if (!hits.length) ul.innerHTML = `<li class="empty">no match</li>`;
+});
+q.addEventListener("keydown", e => { if (e.key === "Enter") { const f = document.querySelector("#results li.item"); if (f) f.click(); } });
+
+// ---- focus view: callers left, callees right, two steps each way
+const COLW = 300, ROWH = 46, CARDW = 250, CARDH = 36, PER_COL = 24;
+function layers(start, adj) {
+  const seen = new Set([start]), cols = [];
+  let frontier = [start];
+  for (let d = 0; d < 2; d++) {
+    const next = [];
+    for (const n of frontier) for (const m of adj[n]) if (!seen.has(m)) { seen.add(m); next.push(m); }
+    if (!next.length) break;
+    next.sort((a, b) => callers[b].length - callers[a].length);
+    cols.push({ ids: next.slice(0, PER_COL), more: Math.max(0, next.length - PER_COL) });
+    frontier = next.slice(0, PER_COL);
+  }
+  return cols;
+}
+function renderFocus(i) {
+  vp.innerHTML = ""; hideTip();
+  const left = layers(i, callers), right = layers(i, callees);
+  const pos = new Map(), used = new Set([groupOfDef(i)]);
+  const place = (ids, col, more) => {
+    const h = (ids.length + (more ? 1 : 0)) * ROWH;
+    ids.forEach((n, r) => { if (!pos.has(n)) pos.set(n, { x: col * COLW, y: r * ROWH - h / 2 }); used.add(groupOfDef(n)); });
+    if (more) el("text", { x: col * COLW + 10, y: ids.length * ROWH - h / 2 + 22, class: "sub" }).textContent = `+ ${more} more`;
+  };
+  place([i], 0, 0);
+  left.forEach((c, d) => place(c.ids, -(d + 1), c.more));
+  right.forEach((c, d) => place(c.ids, d + 1, c.more));
+  const heads = [[-2, "callers of callers"], [-1, "callers"], [1, "callees"], [2, "their callees"]];
+  let top = -ROWH;
+  for (const [, p] of pos) top = Math.min(top, p.y);
+  for (const [c, t] of heads) {
+    if ((c < 0 && left.length >= -c) || (c > 0 && right.length >= c))
+      el("text", { x: c * COLW, y: top - 18, class: "colhead" }).textContent = t;
+  }
+  const edges = el("g", {});
+  const drawn = [];
+  for (const [a, pa] of pos) for (const b of callees[a]) {
+    const pb = pos.get(b);
+    if (!pb || a === b || pb.x <= pa.x) continue;
+    const x1 = pa.x + CARDW, y1 = pa.y + CARDH / 2, x2 = pb.x, y2 = pb.y + CARDH / 2, mx = (x1 + x2) / 2;
+    const p = el("path", { d: `M${x1},${y1} C${mx},${y1} ${mx},${y2} ${x2},${y2}`, class: "edge" + (a === i || b === i ? " hot" : "") }, edges);
+    drawn.push(p);
+  }
+  for (const [n, p] of pos) {
+    const g = el("g", { class: "node" + (n === i ? " center" : ""), transform: `translate(${p.x},${p.y})` });
+    el("rect", { class: "card", width: CARDW, height: CARDH, rx: 8 }, g);
+    el("rect", { width: 4, height: CARDH - 12, x: 6, y: 6, rx: 2, fill: colorOf(n) }, g);
+    el("text", { x: 18, y: 15 }, g).textContent = short(qual(n), 34);
+    el("text", { x: 18, y: 29, class: "sub" }, g).textContent = `${kindOf(n)} · ${short(fileOf(n), 26)}:${lineOf(n)}`;
+    g.addEventListener("click", clicked(() => location.hash = "focus=" + encodeURIComponent(qual(n))));
+    g.addEventListener("mousemove", e => showTip(e, `<b>${esc(qual(n))}</b><br><span class="loc">${esc(fileOf(n))}:${lineOf(n)}</span><br>` +
+      `${callers[n].length} callers · ${callees[n].length} callees`));
+    g.addEventListener("mouseleave", hideTip);
+  }
+  const xs = [...pos.values()].map(p => p.x), ys = [...pos.values()].map(p => p.y);
+  fit({ x: Math.min(...xs), y: Math.min(...ys) - 40, w: Math.max(...xs) - Math.min(...xs) + CARDW, h: Math.max(...ys) - Math.min(...ys) + CARDH + 60 });
+  groupLegend(used);
+  showDetail(i);
+}
+
+// ---- map view: folders as nodes, call traffic between them as links
+function renderMap() {
+  vp.innerHTML = ""; hideTip();
+  const G = groupNames.length, w = new Map();
+  for (let a = 0; a < N; a++) for (const b of callees[a]) {
+    const ga = groupOfDef(a), gb = groupOfDef(b);
+    if (ga === gb) continue;
+    const key = ga < gb ? ga * G + gb : gb * G + ga;
+    w.set(key, (w.get(key) || 0) + 1);
+  }
+  const links = [...w].map(([k, v]) => ({ a: Math.floor(k / G), b: k % G, v })).sort((x, y) => y.v - x.v).slice(0, 200);
+  const maxSize = Math.max(1, ...gSize);
+  const r = groupNames.map((_, g) => 7 + 38 * Math.sqrt(gSize[g] / maxSize));
+  const labW = groupNames.map(n => 7 * n.length);
+  // Small deterministic force layout: repulsion, springs along links, gentle gravity.
+  const P = groupNames.map((_, g) => ({ x: Math.cos(g * 2.399) * 200 * Math.sqrt(g + 1), y: Math.sin(g * 2.399) * 200 * Math.sqrt(g + 1), vx: 0, vy: 0 }));
+  const maxV = Math.max(1, ...links.map(l => l.v));
+  for (let it = 0; it < 400; it++) {
+    const t = 1 - it / 400;
+    for (let a = 0; a < G; a++) for (let b = a + 1; b < G; b++) {
+      let dx = P[b].x - P[a].x, dy = P[b].y - P[a].y, d2 = dx * dx + dy * dy + 0.01;
+      const d = Math.sqrt(d2), min = r[a] + r[b] + 30 + Math.max(labW[a], labW[b]) / 2;
+      const f = (9000 / d2 + (d < min ? (min - d) * 0.5 : 0)) * t;
+      dx /= d; dy /= d; P[a].vx -= dx * f; P[a].vy -= dy * f; P[b].vx += dx * f; P[b].vy += dy * f;
+    }
+    for (const l of links) {
+      const A = P[l.a], B = P[l.b], dx = B.x - A.x, dy = B.y - A.y, d = Math.hypot(dx, dy) || 1;
+      const f = (d - (r[l.a] + r[l.b] + 90)) * 0.02 * (0.3 + l.v / maxV) * t;
+      A.vx += dx / d * f; A.vy += dy / d * f; B.vx -= dx / d * f; B.vy -= dy / d * f;
+    }
+    for (const p of P) { p.vx -= p.x * 0.004; p.vy -= p.y * 0.004; p.x += p.vx * 0.5; p.y += p.vy * 0.5; p.vx *= 0.6; p.vy *= 0.6; }
+  }
+  const lg = el("g", {});
+  for (const l of links) el("line", { x1: P[l.a].x, y1: P[l.a].y, x2: P[l.b].x, y2: P[l.b].y, class: "edge",
+    "stroke-width": (0.6 + 4 * Math.sqrt(l.v / maxV)).toFixed(2) }, lg);
+  const labels = [];
+  for (let g = 0; g < G; g++) {
+    const node = el("g", { class: "node" });
+    el("circle", { class: "group", cx: P[g].x, cy: P[g].y, r: r[g], fill: gColor[g] }, node);
+    labels.push([g, node]);
+    const top = topOf(g);
+    node.addEventListener("mousemove", e => showTip(e, `<b>${esc(groupNames[g])}</b><br>${gSize[g]} symbols<br>` +
+      (top.length ? `most called: ${top.slice(0, 3).map(i => esc(qual(i))).join(", ")}` : "")));
+    node.addEventListener("mouseleave", hideTip);
+    node.addEventListener("click", clicked(() => showGroup(g)));
+  }
+  // Labels last, below each circle, with a halo so links and circles never hide them.
+  for (const [g, node] of labels) {
+    const t = el("text", { x: P[g].x, y: P[g].y + r[g] + 15, "text-anchor": "middle", class: "halo" });
+    t.textContent = groupNames[g];
+    t.addEventListener("click", clicked(() => showGroup(g)));
+    t.style.cursor = "pointer";
+  }
+  const xs = P.map((p, g) => p.x - Math.max(r[g], labW[g] / 2)), xe = P.map((p, g) => p.x + Math.max(r[g], labW[g] / 2));
+  const ys = P.map((p, g) => p.y - r[g]), ye = P.map((p, g) => p.y + r[g] + 20);
+  fit({ x: Math.min(...xs), y: Math.min(...ys), w: Math.max(...xe) - Math.min(...xs), h: Math.max(...ye) - Math.min(...ys) });
+  groupLegend(null);
+  document.getElementById("detail").innerHTML =
+    `<h2>Map</h2><div class="loc">Folders sized by symbol count; links show call traffic between folders. Click a folder for its most-called symbols, or search for a symbol to focus it.</div>`;
+}
+function topOf(g) {
+  const ids = [];
+  for (let i = 0; i < N; i++) if (groupOfDef(i) === g) ids.push(i);
+  return ids.sort((a, b) => callers[b].length - callers[a].length);
+}
+function showGroup(g) {
+  const d = document.getElementById("detail");
+  d.innerHTML = `<h2>Folder</h2><h1>${esc(groupNames[g])}</h1><div class="loc">${gSize[g]} symbols</div>`;
+  d.appendChild(list("Most called", topOf(g).filter(i => callers[i].length), 40));
+}
+
+// ---- routing: #map, #focus=<qualified name or id>
+const byQual = new Map();
+for (let i = N - 1; i >= 0; i--) byQual.set(qual(i), i);
+function route() {
+  const h = decodeURIComponent(location.hash.slice(1));
+  const focus = h.startsWith("focus=") ? h.slice(6) : null;
+  let i = focus == null ? undefined : (byQual.get(focus) ?? (/^\d+$/.test(focus) ? +focus : undefined));
+  if (i === undefined && focus) {
+    const lc = focus.toLowerCase();
+    i = lower.findIndex(s => s === lc || s.endsWith("." + lc));
+    if (i < 0) i = undefined;
+  }
+  document.getElementById("tab-map").classList.toggle("on", i === undefined);
+  document.getElementById("tab-focus").classList.toggle("on", i !== undefined);
+  if (i !== undefined) { document.getElementById("tab-focus").href = location.hash; renderFocus(i); }
+  else {
+    // "Focus" with nothing selected starts at the most-called symbol.
+    let best = 0;
+    for (let k = 1; k < N; k++) if (callers[k].length > callers[best].length) best = k;
+    if (N) document.getElementById("tab-focus").href = "#focus=" + encodeURIComponent(qual(best));
+    renderMap();
+  }
+}
+addEventListener("hashchange", route);
+addEventListener("resize", route);
+route();
+</script>
+</body>
+</html>

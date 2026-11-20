@@ -1,0 +1,29 @@
+# Dependency audit: RustSec advisories, licenses, banned crates and sources,
+# per deny.toml. Runs on dependency changes, weekly (new advisories appear
+# without any change here), and as a required step of every release.
+name: Audit
+
+on:
+  push:
+    branches: [main]
+    paths: [Cargo.toml, Cargo.lock, deny.toml, .github/workflows/audit.yml]
+  pull_request:
+    paths: [Cargo.toml, Cargo.lock, deny.toml, .github/workflows/audit.yml]
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      plan:
+        required: false
+        type: string
+
+jobs:
+  cargo-deny:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check
+          arguments: --all-features
