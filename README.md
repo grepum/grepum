@@ -174,6 +174,24 @@ Caveat: the same author wrote the generator and the resolver, and the
 resolver was tuned against these projects. They use common idioms, but treat
 the accuracy numbers as a regression suite, not proof of accuracy on real code.
 
+### TypeScript checked against the TypeScript compiler
+
+Real code has no recorded call graph, but for TypeScript the compiler's type
+checker can say what every call, `new` and `<Component />` resolves to. Calls
+into libraries are left out, as are test files.
+
+| repo | calls tsc resolves | grepum finds (recall) | grepum's links that are right (precision) |
+|---|---|---|---|
+| [hono](https://github.com/honojs/hono) v4.13.19 | 890 | 91.9% | 98.7% |
+| [excalidraw](https://github.com/excalidraw/excalidraw) v0.18.0 (React) | 5,242 | 97.1% | 98.2% |
+
+Most remaining misses need type inference grepum doesn't do: a handler whose
+parameter is typed only by context (`app.get('/', (c) => c.json())`), or a
+function pulled out of a hook's return value (`const { t } = useI18n()`).
+On excalidraw, 74 of the "wrong" links are components wrapped in `memo` or
+`forwardRef` that tsc reports as variables rather than functions.
+`benchmark/ts/run.sh` reproduces this.
+
 ### Running it
 
 ```

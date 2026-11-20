@@ -61,13 +61,16 @@ pub enum DefKind {
     Trait,
     Type,
     Module,
+    /// A JS/TS object literal bound to a top-level name (`const api = { get() {} }`):
+    /// a namespace of methods, reached as `api.get()`.
+    Object,
 }
 
 impl DefKind {
     pub fn is_type(self) -> bool {
         matches!(
             self,
-            DefKind::Class | DefKind::Interface | DefKind::Struct | DefKind::Enum | DefKind::Trait | DefKind::Type
+            DefKind::Class | DefKind::Interface | DefKind::Struct | DefKind::Enum | DefKind::Trait | DefKind::Type | DefKind::Object
         )
     }
     pub fn is_callable(self) -> bool {
@@ -84,6 +87,7 @@ impl DefKind {
             DefKind::Trait => "trait",
             DefKind::Type => "type",
             DefKind::Module => "mod",
+            DefKind::Object => "object",
         }
     }
 }
@@ -171,6 +175,16 @@ pub enum TypeHint {
     CallResult { name: String, qualifier: Option<String> },
     /// Same type as another binding in the same scope (`self.repo = repo`).
     Alias(String),
+    /// A local name whose type isn't known (an untyped parameter, a destructured
+    /// value). Recorded so it shadows same-named functions elsewhere.
+    Unknown,
+}
+
+/// `export { local as exported }` / `export default local` without a `from`.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct Export {
+    pub local: String,
+    pub exported: String,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -178,6 +192,9 @@ pub struct Binding {
     pub scope: BindingScope,
     pub name: String,
     pub ty: TypeHint,
+    /// Line the name is bound on; 0 for parameters (bound for the whole body).
+    /// A local only shadows from here on: `let globs = globs(..)` calls the outer `globs`.
+    pub line: u32,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -187,5 +204,6 @@ pub struct FileFacts {
     pub refs: Vec<Ref>,
     pub imports: Vec<Import>,
     pub bindings: Vec<Binding>,
+    pub exports: Vec<Export>,
     pub lines: u32,
 }

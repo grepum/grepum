@@ -6,6 +6,7 @@
 //! is cheaper for an agent than a confidently wrong one.
 
 use crate::facts::*;
+use crate::js_project::JsProject;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -102,6 +103,8 @@ struct FileCtx {
     wildcards: Vec<Vec<u32>>,
     reexports: Vec<(Option<String>, Target)>, // (exported name or None for `*`, target)
     bindings: HashMap<(Option<u32>, String), TypeHint>,
+    /// (function, local name) -> first line it is bound on (0 for parameters).
+    locals: HashMap<(u32, String), u32>,
 }
 
 struct Resolver<'a> {
@@ -120,6 +123,9 @@ struct Resolver<'a> {
     cpp_files: HashMap<String, Vec<u32>>,
     ctx: Vec<FileCtx>,
     bases: HashMap<u32, Vec<u32>>,
+    /// (enclosing function, name) -> functions nested in it.
+    nested: HashMap<(u32, String), Vec<u32>>,
+    js: JsProject,
 }
 
 /// Method names that standard containers, strings, promises and streams also
@@ -137,6 +143,15 @@ const COMMON_METHODS: &[&str] = &[
     "IsValid", "Broadcast", "AddDynamic", "RemoveDynamic", "AddUObject", "AddLambda", "BindUObject",
     "BindLambda", "Execute", "ExecuteIfBound", "IsBound", "ToString", "size", "begin", "end", "empty",
     "push_back", "emplace_back", "erase", "at", "data", "c_str", "reset", "release", "lock",
+];
+
+/// Browser and Node globals: a call on one of these is never a project method.
+const JS_GLOBALS: &[&str] = &[
+    "console", "Math", "JSON", "Object", "Array", "Promise", "Reflect", "Number", "String", "Boolean", "Symbol",
+    "Date", "RegExp", "Error", "Intl", "BigInt", "Map", "Set", "WeakMap", "WeakSet", "Atomics", "Proxy", "window",
+    "document", "globalThis", "self", "process", "navigator", "localStorage", "sessionStorage", "location",
+    "history", "performance", "crypto", "Buffer", "URL", "URLSearchParams", "Response", "Request", "Headers",
+    "require", "module", "exports",
 ];
 
 fn dir_of(path: &str) -> &str {
@@ -168,8 +183,8 @@ fn qual_segments(q: &str) -> Vec<&str> {
     q.split("::").flat_map(|s| s.split('.')).filter(|s| !s.is_empty()).collect()
 }
 
-pub fn build(inputs: Vec<Input>) -> Graph {
-    let mut r = Resolver::new(&inputs);
+pub fn build(inputs: Vec<Input>, js: JsProject) -> Graph {
+    let mut r = Resolver::new(&inputs, js);
     r.build_contexts();
     r.resolve_inherits();
     let per_file: Vec<(Vec<Edge>, Stats)> = (0..inputs.len()).into_par_iter().map(|fi| r.resolve_file(fi as u32)).collect();
@@ -215,7 +230,7 @@ pub fn build(inputs: Vec<Input>) -> Graph {
 }
 
 impl<'a> Resolver<'a> {
-    fn new(inputs: &'a [Input]) -> Self {
+    fn new(inputs: &'a [Input], js: JsProject) -> Self {
         let mut files = Vec::with_capacity(inputs.len());
         let mut defs = Vec::new();
         for (fi, inp) in inputs.iter().enumerate() {
@@ -252,9 +267,13 @@ impl<'a> Resolver<'a> {
         let mut by_name: HashMap<String, Vec<u32>> = HashMap::new();
         let mut top_level: HashMap<(u32, String), Vec<u32>> = HashMap::new();
         let mut methods: HashMap<(String, String), Vec<u32>> = HashMap::new();
+        let mut nested: HashMap<(u32, String), Vec<u32>> = HashMap::new();
         for (i, d) in defs.iter().enumerate() {
             let i = i as u32;
             by_name.entry(d.name.clone()).or_default().push(i);
+            if let Some(p) = d.parent.filter(|p| defs[*p as usize].kind.is_callable()) {
+                nested.entry((p, d.name.clone())).or_default().push(i);
+            }
             if let (DefKind::Method, Some(o)) = (d.kind, &d.owner) {
                 methods.entry((o.clone(), d.name.clone())).or_default().push(i);
             } else if d.parent.is_none() || d.kind.is_type() {
@@ -319,7 +338,64 @@ impl<'a> Resolver<'a> {
             cpp_files,
             ctx: vec![],
             bases: HashMap::new(),
+            nested,
+            js,
         }
+    }
+
+    /// Defined inside a function body: only reachable from within it.
+    fn is_nested(&self, d: u32) -> bool {
+        self.defs[d as usize].parent.is_some_and(|p| self.defs[p as usize].kind.is_callable())
+    }
+
+    /// A method a receiver of unknown type could plausibly reach: one declared in
+    /// a class-like type, not in a namespace object or a function body.
+    fn is_member_method(&self, d: u32) -> bool {
+        match self.defs[d as usize].parent {
+            Some(p) => self.defs[p as usize].kind.is_type() && self.defs[p as usize].kind != DefKind::Object,
+            None => true,
+        }
+    }
+
+    /// Interfaces, namespace objects and TS type aliases can't be called or constructed.
+    fn is_call_target(&self, d: u32) -> bool {
+        let def = &self.defs[d as usize];
+        match def.kind {
+            DefKind::Interface | DefKind::Object => false,
+            DefKind::Type => !self.files[def.file as usize].lang.is_js_family(),
+            _ => true,
+        }
+    }
+
+    fn call_targets(&self, targets: Vec<u32>) -> Vec<u32> {
+        targets.into_iter().filter(|d| self.is_call_target(*d)).collect()
+    }
+
+    /// Whether `name`, used on line `at`, is a local (parameter or variable bound
+    /// earlier) of `scope` or an enclosing function.
+    fn is_local(&self, file: u32, scope: Option<u32>, name: &str, at: u32) -> bool {
+        let facts = &self.inputs[file as usize].facts;
+        let mut s = scope;
+        while let Some(d) = s {
+            if self.ctx[file as usize].locals.get(&(d, name.to_string())).is_some_and(|l| *l == 0 || *l < at) {
+                return true;
+            }
+            s = facts.defs[d as usize].parent;
+        }
+        false
+    }
+
+    /// A function declared in `scope` or an enclosing function body.
+    fn nested_in_scope(&self, file: u32, scope: Option<u32>, name: &str) -> Vec<u32> {
+        let facts = &self.inputs[file as usize].facts;
+        let mut s = scope;
+        while let Some(d) = s {
+            if let Some(v) = self.nested.get(&(self.global_def(file, d), name.to_string())) {
+                return v.clone();
+            }
+            s = facts.defs[d as usize].parent;
+        }
+        vec![]
     }
 
     fn global_def(&self, file: u32, local: u32) -> u32 {
@@ -352,20 +428,25 @@ impl<'a> Resolver<'a> {
     }
 
     fn js_module(&self, file: u32, spec: &str) -> Option<u32> {
-        let base = if spec.starts_with('.') {
-            normalize_path(&format!("{}/{}", dir_of(&self.files[file as usize].path), spec))
-        } else if let Some(rest) = spec.strip_prefix("@/").or_else(|| spec.strip_prefix("~/")) {
-            format!("src/{rest}")
+        let importer = &self.files[file as usize].path;
+        let bases = if spec.starts_with('.') {
+            vec![normalize_path(&format!("{}/{}", dir_of(importer), spec))]
         } else {
-            return None;
-        };
-        let stem = strip_ext(&base);
-        for cand in [base.as_str(), stem, &format!("{base}/index"), &format!("{stem}/index")] {
-            if let Some(f) = self.js_paths.get(cand) {
-                return Some(*f);
+            let mut c = self.js.candidates(importer, spec);
+            // Common bundler aliases when no tsconfig says otherwise.
+            if let Some(rest) = spec.strip_prefix("@/").or_else(|| spec.strip_prefix("~/")) {
+                c.push(format!("src/{rest}"));
             }
-        }
-        None
+            c
+        };
+        bases.iter().find_map(|base| self.js_file(base))
+    }
+
+    /// The source file an import path names: exact, without its extension
+    /// (`./x.js` -> `x.ts`), or as a directory `index`.
+    fn js_file(&self, base: &str) -> Option<u32> {
+        let stem = strip_ext(base);
+        [base, stem, &format!("{base}/index"), &format!("{stem}/index")].into_iter().find_map(|c| self.js_paths.get(c).copied())
     }
 
     /// `#include "a/b.h"`: relative to the includer first, then any file whose
@@ -496,7 +577,7 @@ impl<'a> Resolver<'a> {
                 let fi = fi as u32;
                 let facts = &self.inputs[fi as usize].facts;
                 let lang = facts.lang;
-                let mut c = FileCtx { imports: HashMap::new(), wildcards: vec![], reexports: vec![], bindings: HashMap::new() };
+                let mut c = FileCtx { imports: HashMap::new(), wildcards: vec![], reexports: vec![], bindings: HashMap::new(), locals: HashMap::new() };
                 for imp in &facts.imports {
                     if imp.wildcard {
                         if let Target::Module(_, f) = self.import_target(fi, lang, imp, None) {
@@ -541,6 +622,10 @@ impl<'a> Resolver<'a> {
                         BindingScope::Def(d) => Some(*d),
                         BindingScope::Owner(_) => continue,
                     };
+                    if let Some(d) = scope {
+                        let first = c.locals.entry((d, b.name.clone())).or_insert(b.line);
+                        *first = (*first).min(b.line);
+                    }
                     c.bindings.insert((scope, b.name.clone()), b.ty.clone());
                 }
                 c
@@ -563,6 +648,14 @@ impl<'a> Resolver<'a> {
             return out;
         }
         for f in files {
+            // `export { local as name }` / `export default local`.
+            for ex in self.inputs[*f as usize].facts.exports.iter().filter(|e| e.exported == name) {
+                match self.ctx[*f as usize].imports.get(&ex.local) {
+                    Some(Target::Symbol(tf, orig)) => out.extend(self.exported(tf, orig, depth - 1)),
+                    _ if ex.local != name => out.extend(self.exported(&[*f], &ex.local, depth - 1)),
+                    _ => {}
+                }
+            }
             for (exported, target) in &self.ctx[*f as usize].reexports {
                 match (exported.as_deref(), target) {
                     (Some(e), Target::Symbol(tf, orig)) if e == name => out.extend(self.exported(tf, orig, depth - 1)),
@@ -572,11 +665,11 @@ impl<'a> Resolver<'a> {
             }
         }
         if out.is_empty() && name == "default" {
-            // `export default` isn't modelled: fall back to the file's single top-level class/function.
-            for f in files {
+            // An anonymous `export default`: fall back to the file's single top-level class/function.
+            for f in files.iter().filter(|f| !self.inputs[**f as usize].facts.exports.iter().any(|e| e.exported == "default")) {
                 let tops: Vec<u32> = (0..self.files[*f as usize].def_count)
                     .map(|l| self.global_def(*f, l))
-                    .filter(|d| self.defs[*d as usize].parent.is_none() && self.defs[*d as usize].kind != DefKind::Method)
+                    .filter(|d| self.defs[*d as usize].parent.is_none() && self.defs[*d as usize].kind != DefKind::Method && self.is_call_target(*d))
                     .collect();
                 if tops.len() == 1 {
                     out.extend(tops);
@@ -712,7 +805,7 @@ impl<'a> Resolver<'a> {
                 None => vec![],
             },
             TypeHint::CallResult { name, qualifier } => {
-                let (targets, _) = self.resolve_call(file, scope, owner, name, qualifier.as_deref(), depth - 1);
+                let (targets, _) = self.resolve_call(file, scope, owner, name, qualifier.as_deref(), 0, depth - 1);
                 let mut out = vec![];
                 for t in targets {
                     let d = &self.defs[t as usize];
@@ -724,6 +817,7 @@ impl<'a> Resolver<'a> {
                 }
                 out
             }
+            TypeHint::Unknown => vec![],
         }
     }
 
@@ -740,7 +834,7 @@ impl<'a> Resolver<'a> {
                 Some(TypeHint::Named(_)) => Thing::External,
                 _ => Thing::Unknown,
             },
-            TypeHint::CallResult { .. } => Thing::Unknown,
+            TypeHint::CallResult { .. } | TypeHint::Unknown => Thing::Unknown,
         }
     }
 
@@ -831,7 +925,7 @@ impl<'a> Resolver<'a> {
                 None => Thing::Unknown,
             },
             h if h.ends_with("()") => {
-                let (targets, _) = self.resolve_call(file, scope, owner, &h[..h.len() - 2], None, depth.saturating_sub(1));
+                let (targets, _) = self.resolve_call(file, scope, owner, &h[..h.len() - 2], None, 0, depth.saturating_sub(1));
                 self.returns_of(targets)
             }
             h => {
@@ -863,6 +957,8 @@ impl<'a> Resolver<'a> {
                         }
                         Target::External => Thing::External,
                     }
+                } else if lang.is_js_family() && JS_GLOBALS.contains(&h) {
+                    Thing::External
                 } else {
                     let ts = self.types_named(file, h);
                     if ts.is_empty() { Thing::Unknown } else { Thing::Types(ts) }
@@ -921,7 +1017,8 @@ impl<'a> Resolver<'a> {
     }
 
     /// Returns (targets, exact?) for a call/new of `name` with optional receiver `qualifier`.
-    fn resolve_call(&self, file: u32, scope: Option<u32>, owner: Option<&str>, name: &str, qualifier: Option<&str>, depth: u8) -> (Vec<u32>, Option<Conf>) {
+    /// `at` is the line of the call; 0 when unknown (then only parameters shadow).
+    fn resolve_call(&self, file: u32, scope: Option<u32>, owner: Option<&str>, name: &str, qualifier: Option<&str>, at: u32, depth: u8) -> (Vec<u32>, Option<Conf>) {
         if depth == 0 {
             return (vec![], None);
         }
@@ -936,22 +1033,30 @@ impl<'a> Resolver<'a> {
                         }
                     }
                 }
+                let nested = self.nested_in_scope(file, scope, name);
+                if !nested.is_empty() {
+                    return (nested, Some(Conf::Exact));
+                }
+                if self.is_local(file, scope, name, at) {
+                    // A parameter or local variable holding a function: its target is a value.
+                    return (vec![], None);
+                }
                 if let Some(d) = self.top_level.get(&(file, name.to_string())) {
-                    let d: Vec<u32> = d.iter().copied().filter(|i| self.defs[*i as usize].kind != DefKind::Method).collect();
+                    let d: Vec<u32> = d.iter().copied().filter(|i| self.defs[*i as usize].kind != DefKind::Method && self.is_call_target(*i)).collect();
                     if !d.is_empty() {
                         return (d, Some(Conf::Exact));
                     }
                 }
                 match self.ctx[file as usize].imports.get(name) {
                     Some(Target::Symbol(f, orig)) => {
-                        let d = self.exported(f, orig, 4);
+                        let d = self.call_targets(self.exported(f, orig, 4));
                         return if d.is_empty() { (d, None) } else { (d, Some(Conf::Exact)) };
                     }
                     Some(_) => return (vec![], None),
                     None => {}
                 }
                 for w in &self.ctx[file as usize].wildcards {
-                    let d = self.exported(w, name, 4);
+                    let d = self.call_targets(self.exported(w, name, 4));
                     if !d.is_empty() {
                         return (d, Some(Conf::Exact));
                     }
@@ -968,7 +1073,7 @@ impl<'a> Resolver<'a> {
                 let all: Vec<u32> = self
                     .by_name
                     .get(name)
-                    .map(|v| v.iter().copied().filter(|d| self.defs[*d as usize].kind != DefKind::Method).collect())
+                    .map(|v| v.iter().copied().filter(|d| self.defs[*d as usize].kind != DefKind::Method && !self.is_nested(*d) && self.is_call_target(*d)).collect())
                     .unwrap_or_default();
                 let n = self.narrow(file, all);
                 if n.is_empty() { (n, None) } else { (n, Some(Conf::Inferred)) }
@@ -981,7 +1086,7 @@ impl<'a> Resolver<'a> {
                         if m.is_empty() { (m, None) } else { (m, Some(Conf::Exact)) }
                     }
                     Thing::Module(_, files) => {
-                        let d = self.exported(&files, name, 4);
+                        let d = self.call_targets(self.exported(&files, name, 4));
                         if d.is_empty() { (d, None) } else { (d, Some(Conf::Exact)) }
                     }
                     Thing::External => (vec![], None),
@@ -1004,7 +1109,7 @@ impl<'a> Resolver<'a> {
                         let all: Vec<u32> = self
                             .by_name
                             .get(name)
-                            .map(|v| v.iter().copied().filter(|d| self.defs[*d as usize].kind == DefKind::Method).collect())
+                            .map(|v| v.iter().copied().filter(|d| self.defs[*d as usize].kind == DefKind::Method && self.is_member_method(*d)).collect())
                             .unwrap_or_default();
                         if all.len() == 1 { (all, Some(Conf::Inferred)) } else { (vec![], None) }
                     }
@@ -1090,7 +1195,7 @@ impl<'a> Resolver<'a> {
         let mut seen: HashSet<(Option<u32>, u32)> = HashSet::new();
         for r in facts.refs.iter().filter(|r| r.kind != RefKind::Inherit) {
             stats.refs += 1;
-            let (targets, conf) = self.resolve_call(fi, r.scope, r.owner.as_deref(), &r.name, r.qualifier.as_deref(), 6);
+            let (targets, conf) = self.resolve_call(fi, r.scope, r.owner.as_deref(), &r.name, r.qualifier.as_deref(), r.line, 6);
             let Some(conf) = conf else {
                 let known = self.by_name.contains_key(&r.name);
                 if known { stats.ambiguous += 1 } else { stats.unresolved += 1 }

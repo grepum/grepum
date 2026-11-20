@@ -1,7 +1,29 @@
 # Changelog
 
-## Unreleased
+## 0.3.0
 
+TypeScript, scored against the TypeScript compiler on two real repos
+(`benchmark/ts/run.sh`): hono 88.9% -> 91.9% of calls found and 95.9% ->
+98.7% of links right; excalidraw 79.4% -> 97.1% found, 95.9% -> 98.2% right.
+
+- **tsconfig `paths` and `baseUrl`**, including ones inherited through
+  `extends`, and **workspace packages** (`import { x } from '@acme/geo'`)
+  resolve to the source files. Edits to tsconfig/package.json in a dirty
+  worktree take effect immediately.
+- **JSX components are calls**: `<Widget />` and `<Toolbar.Item />` link to
+  the component, including ones wrapped in `memo`/`forwardRef`.
+- **Exports without `from`**: `export default Scene;`, `export { a as b }`
+  and `export { importedName }` are followed.
+- **Getters and interface properties type members**: `get req(): HonoRequest`
+  makes `c.req.header()` resolve.
+- **Object-literal namespaces**: `const util = { fmt() {}, parse: (s) => s }`
+  makes `util.fmt()` link to `util.fmt` (shown as kind `object`).
+- **Generic constraints**: `<T extends Repo>(r: T) => r.find()`.
+- **Fewer wrong links**: `console.*` and other JS globals are never project
+  methods; parameters and locals (also destructured ones) shadow same-named
+  functions elsewhere, from the line they're bound on, in every language;
+  functions nested in another function are only reachable from inside it; an
+  interface or type alias is never a call target.
 - **5-day dependency cooldown.** `cargo update` (Cargo 1.100+) skips crate
   versions younger than 5 days, and the release audit fails if `Cargo.lock`
   holds one. clap and regex were pinned back to their previous releases

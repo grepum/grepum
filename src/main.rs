@@ -5,6 +5,7 @@ mod graph;
 mod history;
 mod html;
 mod install;
+mod js_project;
 mod query;
 mod snapshot;
 mod store;

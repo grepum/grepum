@@ -27,9 +27,10 @@ pub fn extract(lang: Lang, raw: &[u8]) -> FileFacts {
     let mut w = Walker {
         lang,
         src,
-        facts: FileFacts { lang, defs: vec![], refs: vec![], imports: vec![], bindings: vec![], lines },
+        facts: FileFacts { lang, defs: vec![], refs: vec![], imports: vec![], bindings: vec![], exports: vec![], lines },
         scopes: vec![],
         owners: vec![],
+        cur_line: 0,
         attrs: ue.as_ref().map(|u| u.attrs.clone()).unwrap_or_default(),
     };
     if let Some(tree) = tree {
@@ -86,12 +87,17 @@ const TYPE_RETURNING_TEMPLATES: &[&str] = &[
 const FUNC_VALUE_KINDS: &[&str] =
     &["arrow_function", "function_expression", "function", "generator_function"];
 
+/// Higher-order calls that return (a wrapped) version of the function they're given.
+const JS_FUNCTION_WRAPPERS: &[&str] = &["memo", "forwardRef", "observer", "useCallback", "debounce", "throttle"];
+
 struct Walker<'a> {
     lang: Lang,
     src: &'a [u8],
     facts: FileFacts,
     scopes: Vec<u32>,
     owners: Vec<String>,
+    /// Start line of the node being handled.
+    cur_line: u32,
     /// Unreal reflection specifiers keyed by the line of the declaration they annotate.
     attrs: HashMap<u32, Vec<String>>,
 }
@@ -123,6 +129,7 @@ impl<'a> Walker<'a> {
     }
 
     fn visit(&mut self, n: Node) {
+        let outer = std::mem::replace(&mut self.cur_line, line(n));
         let handled = match self.lang {
             Lang::Python => self.python(n),
             Lang::TypeScript | Lang::Tsx | Lang::JavaScript => self.js(n),
@@ -133,6 +140,7 @@ impl<'a> Walker<'a> {
         if !handled {
             self.visit_children(n);
         }
+        self.cur_line = outer;
     }
 
     // ---------- shared helpers ----------
@@ -224,7 +232,12 @@ impl<'a> Walker<'a> {
         if name.is_empty() {
             return;
         }
-        self.facts.bindings.push(Binding { scope, name: name.to_string(), ty });
+        // Bound while handling the function itself: a parameter.
+        let line = match scope {
+            BindingScope::Def(s) if self.facts.defs[s as usize].line == self.cur_line => 0,
+            _ => self.cur_line,
+        };
+        self.facts.bindings.push(Binding { scope, name: name.to_string(), ty, line });
     }
 
     /// Text of a receiver/path expression, or `?` if it isn't a plain name chain.
@@ -438,12 +451,14 @@ impl<'a> Walker<'a> {
                         let (pname, pty) = match p.kind() {
                             "typed_parameter" => (children(p).first().copied(), p.child_by_field_name("type")),
                             "typed_default_parameter" => (p.child_by_field_name("name"), p.child_by_field_name("type")),
+                            "default_parameter" => (p.child_by_field_name("name"), None),
+                            "identifier" => (Some(p), None),
                             _ => (None, None),
                         };
                         let pty = pty.map(|t| self.type_name(t).unwrap_or_else(|| format!("<{}>", self.text(t))));
-                        if let (Some(pn), Some(t)) = (pname, pty) {
+                        if let Some(pn) = pname.filter(|n| n.kind() == "identifier") {
                             let pn = self.text(pn);
-                            self.add_binding(BindingScope::Def(idx), pn, TypeHint::Named(t));
+                            self.add_binding(BindingScope::Def(idx), pn, pty.map(TypeHint::Named).unwrap_or(TypeHint::Unknown));
                         }
                     }
                 }
@@ -553,17 +568,27 @@ impl<'a> Walker<'a> {
 
     // ---------- JavaScript / TypeScript ----------
 
-    fn js_params(&mut self, params: Option<Node>, idx: u32, is_ctor: bool) {
-        let Some(params) = params else { return };
+    /// Parameters become bindings of the function's scope: typed ones carry their
+    /// type (a generic parameter its constraint), the rest are known-local names.
+    fn js_params(&mut self, func: Node, idx: u32, is_ctor: bool) {
+        if let Some(single) = func.child_by_field_name("parameter") {
+            self.js_pattern_names(single, BindingScope::Def(idx)); // `x => x()`
+        }
+        let Some(params) = func.child_by_field_name("parameters") else { return };
+        let generics = self.js_type_params(func);
         for p in children(params) {
-            if !matches!(p.kind(), "required_parameter" | "optional_parameter") {
+            let pat = match p.kind() {
+                "required_parameter" | "optional_parameter" => p.child_by_field_name("pattern"),
+                "identifier" | "object_pattern" | "array_pattern" | "assignment_pattern" | "rest_pattern" => Some(p), // plain JS
+                _ => None,
+            };
+            let Some(pat) = pat else { continue };
+            let ty = p.child_by_field_name("type").and_then(|t| self.type_name(t));
+            let ty = ty.map(|t| generics.get(&t).cloned().unwrap_or(t));
+            let (Some(ty), "identifier") = (ty, pat.kind()) else {
+                self.js_pattern_names(pat, BindingScope::Def(idx));
                 continue;
-            }
-            let Some(pat) = p.child_by_field_name("pattern") else { continue };
-            if pat.kind() != "identifier" {
-                continue;
-            }
-            let Some(ty) = p.child_by_field_name("type").and_then(|t| self.type_name(t)) else { continue };
+            };
             let name = self.text(pat);
             self.add_binding(BindingScope::Def(idx), name, TypeHint::Named(ty.clone()));
             let is_property = children(p).iter().any(|c| c.kind() == "accessibility_modifier" || self.text(*c) == "readonly");
@@ -575,11 +600,115 @@ impl<'a> Walker<'a> {
         }
     }
 
+    /// `<T extends Repo>`: generic parameter name -> its constraint's type.
+    fn js_type_params(&self, func: Node) -> HashMap<String, String> {
+        let mut out = HashMap::new();
+        if let Some(tp) = func.child_by_field_name("type_parameters") {
+            for p in children(tp).into_iter().filter(|p| p.kind() == "type_parameter") {
+                let name = p.child_by_field_name("name").map(|n| self.text(n).to_string());
+                let bound = p.child_by_field_name("constraint").and_then(|c| self.type_name(c));
+                if let (Some(n), Some(b)) = (name, bound) {
+                    out.insert(n, b);
+                }
+            }
+        }
+        out
+    }
+
+    /// Every name a parameter or destructuring pattern binds, as a local of unknown type.
+    fn js_pattern_names(&mut self, pat: Node, scope: BindingScope) {
+        match pat.kind() {
+            "identifier" | "shorthand_property_identifier_pattern" => self.add_binding(scope, self.text(pat), TypeHint::Unknown),
+            "pair_pattern" => {
+                if let Some(v) = pat.child_by_field_name("value") {
+                    self.js_pattern_names(v, scope);
+                }
+            }
+            "assignment_pattern" | "object_assignment_pattern" => {
+                if let Some(l) = pat.child_by_field_name("left") {
+                    self.js_pattern_names(l, scope);
+                }
+            }
+            "object_pattern" | "array_pattern" | "rest_pattern" => {
+                for c in children(pat) {
+                    self.js_pattern_names(c, scope.clone());
+                }
+            }
+            _ => {}
+        }
+    }
+
     fn js_function(&mut self, name: &str, kind: DefKind, def_node: Node, func: Node, owner: Option<String>) {
         let ret = func.child_by_field_name("return_type").and_then(|r| self.type_name(r));
         let idx = self.add_def(name, kind, def_node, owner, ret);
-        self.js_params(func.child_by_field_name("parameters"), idx, name == "constructor");
+        self.js_params(func, idx, name == "constructor");
         self.in_scope(Some(idx), None, func.child_by_field_name("body"));
+    }
+
+    /// `memo((props) => ...)`, `forwardRef(function (props, ref) {...})`: a
+    /// component wrapped by a higher-order function is still that function.
+    fn js_wrapped_function<'t>(&self, v: Node<'t>) -> Option<Node<'t>> {
+        if v.kind() != "call_expression" {
+            return None;
+        }
+        let (name, _) = self.split_callee(v.child_by_field_name("function")?);
+        if !JS_FUNCTION_WRAPPERS.contains(&name?.as_str()) {
+            return None;
+        }
+        let args = v.child_by_field_name("arguments")?;
+        children(args).into_iter().find(|a| FUNC_VALUE_KINDS.contains(&a.kind()) || a.kind() == "call_expression")
+            .and_then(|a| if a.kind() == "call_expression" { self.js_wrapped_function(a) } else { Some(a) })
+    }
+
+    /// The wrapper calls around a wrapped function (`memo(forwardRef(fn), eq)`) are
+    /// calls too, made from the enclosing scope; so are their other arguments.
+    fn js_wrapper_calls(&mut self, mut call: Node, func: Node) {
+        while call.kind() == "call_expression" {
+            if let Some((Some(name), qualifier)) = call.child_by_field_name("function").map(|c| self.split_callee(c)) {
+                self.add_ref(RefKind::Call, &name, qualifier, call);
+            }
+            let Some(args) = call.child_by_field_name("arguments") else { return };
+            let mut next = None;
+            for a in children(args) {
+                if a.id() == func.id() || (a.kind() == "call_expression" && next.is_none() && a.byte_range().contains(&func.start_byte())) {
+                    next = Some(a);
+                } else {
+                    self.visit(a);
+                }
+            }
+            match next {
+                Some(a) if a.id() != func.id() => call = a,
+                _ => return,
+            }
+        }
+    }
+
+    /// `const api = { get() {}, put: (x) => x }` at the top level: a namespace
+    /// object whose function members are its methods.
+    fn js_object_namespace(&mut self, name: &str, decl: Node, obj: Node) -> bool {
+        let is_fn_member = |m: &Node| {
+            m.kind() == "method_definition"
+                || (m.kind() == "pair" && m.child_by_field_name("value").is_some_and(|v| FUNC_VALUE_KINDS.contains(&v.kind())))
+        };
+        if !self.scopes.is_empty() || !children(obj).iter().any(is_fn_member) {
+            return false;
+        }
+        let idx = self.add_def(name, DefKind::Object, decl, None, None);
+        self.scopes.push(idx);
+        self.owners.push(name.to_string());
+        for m in children(obj) {
+            let key = m.child_by_field_name("key").filter(|k| matches!(k.kind(), "property_identifier" | "identifier"));
+            match (m.kind(), key, m.child_by_field_name("value")) {
+                ("pair", Some(k), Some(v)) if FUNC_VALUE_KINDS.contains(&v.kind()) => {
+                    let key = self.text(k);
+                    self.js_function(key, DefKind::Method, m, v, Some(name.to_string()));
+                }
+                _ => self.visit(m),
+            }
+        }
+        self.owners.pop();
+        self.scopes.pop();
+        true
     }
 
     fn js(&mut self, n: Node) -> bool {
@@ -627,27 +756,80 @@ impl<'a> Walker<'a> {
             "method_definition" | "method_signature" | "abstract_method_signature" => {
                 let Some(name) = f("name").map(|x| self.text(x)) else { return false };
                 let owner = self.owners.last().cloned();
+                // `get req(): HonoRequest` makes `c.req` a member of that type.
+                let getter = (0..n.child_count()).filter_map(|i| n.child(i as _)).any(|c| c.kind() == "get");
+                let ret = f("return_type").and_then(|r| self.type_name(r));
+                if let (true, Some(o), Some(r)) = (getter, &owner, ret) {
+                    self.add_binding(BindingScope::Owner(o.clone()), name, TypeHint::Named(r));
+                }
                 self.js_function(name, DefKind::Method, n, n, owner);
                 true
+            }
+            "property_signature" => {
+                // `interface Ctx { req: HonoRequest }`
+                if let (Some(nn), Some(o)) = (f("name"), self.owners.last().cloned()) {
+                    if let Some(t) = f("type").and_then(|t| self.type_name(t)) {
+                        self.add_binding(BindingScope::Owner(o), self.text(nn), TypeHint::Named(t));
+                    }
+                }
+                true
+            }
+            "jsx_opening_element" | "jsx_self_closing_element" => {
+                // `<Widget />` / `<Toolbar.Item />` renders (calls) a component; lowercase tags are DOM.
+                if let Some(nm) = f("name") {
+                    let (name, qualifier) = self.split_callee(nm);
+                    let component = qualifier.is_some() || name.as_deref().is_some_and(|x| x.starts_with(|c: char| c.is_ascii_uppercase()));
+                    if let (true, Some(name)) = (component, name) {
+                        self.add_ref(RefKind::Call, &name, qualifier, n);
+                    }
+                }
+                false
             }
             "variable_declarator" => {
                 let name_node = f("name");
                 let value = f("value");
                 if let (Some(nn), Some(v)) = (name_node, value) {
-                    if nn.kind() == "identifier" && FUNC_VALUE_KINDS.contains(&v.kind()) {
+                    if nn.kind() == "identifier" {
                         let name = self.text(nn);
-                        self.js_function(name, DefKind::Function, n, v, None);
-                        return true;
+                        if FUNC_VALUE_KINDS.contains(&v.kind()) {
+                            self.js_function(name, DefKind::Function, n, v, None);
+                            return true;
+                        }
+                        if let Some(func) = self.js_wrapped_function(v) {
+                            self.js_wrapper_calls(v, func);
+                            self.js_function(name, DefKind::Function, n, func, None);
+                            return true;
+                        }
+                        let mut inner = v;
+                        while matches!(inner.kind(), "as_expression" | "satisfies_expression" | "parenthesized_expression") {
+                            match children(inner).first() {
+                                Some(c) => inner = *c,
+                                None => break,
+                            }
+                        }
+                        if inner.kind() == "object" && self.js_object_namespace(name, n, inner) {
+                            return true;
+                        }
                     }
                 }
-                if let Some(nn) = name_node.filter(|x| x.kind() == "identifier") {
-                    let hint = f("type")
-                        .and_then(|t| self.type_name(t).map(TypeHint::Named))
-                        .or_else(|| value.and_then(|v| self.value_hint(v)));
-                    if let Some(h) = hint {
-                        let s = self.binding_scope();
-                        self.add_binding(s, self.text(nn), h);
+                let local = self.scope().is_some_and(|s| self.facts.defs[s as usize].kind.is_callable());
+                match name_node {
+                    Some(nn) if nn.kind() == "identifier" => {
+                        let hint = f("type")
+                            .and_then(|t| self.type_name(t).map(TypeHint::Named))
+                            .or_else(|| value.and_then(|v| self.value_hint(v)))
+                            // A function's locals shadow same-named functions elsewhere.
+                            .or(local.then_some(TypeHint::Unknown));
+                        if let Some(h) = hint {
+                            let s = self.binding_scope();
+                            self.add_binding(s, self.text(nn), h);
+                        }
                     }
+                    Some(pat) if local => {
+                        let s = self.binding_scope();
+                        self.js_pattern_names(pat, s); // `const { onPick } = props`
+                    }
+                    _ => {}
                 }
                 self.visit_opt(value);
                 true
@@ -759,7 +941,10 @@ impl<'a> Walker<'a> {
                 true
             }
             "export_statement" => {
-                let Some(src) = f("source") else { return false };
+                let Some(src) = f("source") else {
+                    self.js_local_exports(n);
+                    return false;
+                };
                 let module = self.text(src).trim_matches(|c| c == '"' || c == '\'' || c == '`').to_string();
                 let mut imp = Import { module, names: vec![], alias: None, wildcard: true, reexport: true, line: line(n) };
                 for ch in children(n) {
@@ -784,6 +969,30 @@ impl<'a> Walker<'a> {
                 true
             }
             _ => false,
+        }
+    }
+
+    /// `export { a, b as c }`, `export default name`, `export default class X`.
+    fn js_local_exports(&mut self, n: Node) {
+        for clause in children(n).into_iter().filter(|c| c.kind() == "export_clause") {
+            for spec in children(clause).into_iter().filter(|s| s.kind() == "export_specifier") {
+                let local = spec.child_by_field_name("name").map(|x| self.text(x).to_string()).unwrap_or_default();
+                let exported = spec.child_by_field_name("alias").map(|x| self.text(x).to_string()).unwrap_or_else(|| local.clone());
+                if !local.is_empty() {
+                    self.facts.exports.push(Export { local, exported });
+                }
+            }
+        }
+        let is_default = (0..n.child_count()).filter_map(|i| n.child(i as _)).any(|c| c.kind() == "default");
+        if !is_default {
+            return;
+        }
+        let named = n
+            .child_by_field_name("value")
+            .filter(|v| v.kind() == "identifier")
+            .or_else(|| n.child_by_field_name("declaration").and_then(|d| d.child_by_field_name("name")));
+        if let Some(local) = named {
+            self.facts.exports.push(Export { local: self.text(local).to_string(), exported: "default".into() });
         }
     }
 
@@ -856,8 +1065,8 @@ impl<'a> Walker<'a> {
                     for p in children(params).into_iter().filter(|p| p.kind() == "parameter") {
                         let pat = p.child_by_field_name("pattern").filter(|x| x.kind() == "identifier");
                         let ty = p.child_by_field_name("type").and_then(|t| self.type_name(t));
-                        if let (Some(pat), Some(ty)) = (pat, ty) {
-                            self.add_binding(BindingScope::Def(idx), self.text(pat), TypeHint::Named(ty));
+                        if let Some(pat) = pat {
+                            self.add_binding(BindingScope::Def(idx), self.text(pat), ty.map(TypeHint::Named).unwrap_or(TypeHint::Unknown));
                         }
                     }
                 }
@@ -1003,10 +1212,10 @@ impl<'a> Walker<'a> {
             if !matches!(p.kind(), "parameter_declaration" | "optional_parameter_declaration") {
                 continue;
             }
-            let Some(ty) = p.child_by_field_name("type").and_then(|t| self.type_name(t)) else { continue };
+            let ty = p.child_by_field_name("type").and_then(|t| self.type_name(t));
             let Some(d) = p.child_by_field_name("declarator") else { continue };
             if let (Some(nm), None, _) = self.cpp_declarator(d) {
-                self.add_binding(BindingScope::Def(idx), self.text(nm), TypeHint::Named(ty));
+                self.add_binding(BindingScope::Def(idx), self.text(nm), ty.map(TypeHint::Named).unwrap_or(TypeHint::Unknown));
             }
         }
     }
@@ -1176,11 +1385,11 @@ impl<'a> Walker<'a> {
     fn go_params(&mut self, params: Option<Node>, idx: u32) {
         let Some(params) = params else { return };
         for p in children(params).into_iter().filter(|p| p.kind() == "parameter_declaration") {
-            let Some(ty) = p.child_by_field_name("type").and_then(|t| self.type_name(t)) else { continue };
+            let ty = p.child_by_field_name("type").and_then(|t| self.type_name(t));
             let mut c = p.walk();
             let names: Vec<_> = p.children_by_field_name("name", &mut c).collect();
             for nm in names {
-                self.add_binding(BindingScope::Def(idx), self.text(nm), TypeHint::Named(ty.clone()));
+                self.add_binding(BindingScope::Def(idx), self.text(nm), ty.clone().map(TypeHint::Named).unwrap_or(TypeHint::Unknown));
             }
         }
     }
