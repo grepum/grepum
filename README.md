@@ -104,36 +104,60 @@ plugin in `integrations/claude-code/`; see its README.
 
 ## Benchmarks
 
+grepum against [graphify](https://github.com/Graphify-Labs/graphify) (`graphify update .`,
+AST only) through the same worktree workflow, on two sets of projects.
+
+### Real repositories
+
+Five open-source repos, one per language, cloned at a pinned tag:
+[flask](https://github.com/pallets/flask) 3.1.3,
+[hono](https://github.com/honojs/hono) v4.13.19,
+[ripgrep](https://github.com/BurntSushi/ripgrep) 15.2.0,
+[fzf](https://github.com/junegunn/fzf) v0.75.0 and
+[leveldb](https://github.com/google/leveldb) 1.23.
+
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="benchmark/charts/bench-speed-dark.svg">
-  <img alt="grepum vs graphify: grepum indexes 18-25x faster cold, 30-57x faster after an edit, 32-47x faster across 4 new worktrees, and uses 26-50x less disk" src="benchmark/charts/bench-speed-light.svg" width="840">
+  <source media="(prefers-color-scheme: dark)" srcset="benchmark/charts/real-speed-dark.svg">
+  <img alt="Real repositories: grepum indexes 18-32x faster cold, 37-65x faster after editing one file, 34-58x faster across 4 new worktrees, and uses 18-63x less disk than graphify" src="benchmark/charts/real-speed-light.svg" width="840">
+</picture>
+
+There is no ground truth for real code, so these runs measure speed and disk
+only. Call-edge counts are in the results table.
+
+### Synthetic projects with a known call graph
+
+Three generated projects (TypeScript, Python, Unreal Engine 5 C++) where every
+call is recorded, so accuracy can be scored.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="benchmark/charts/synthetic-speed-dark.svg">
+  <img alt="Synthetic projects: grepum indexes 19-26x faster cold, 34-59x faster after an edit, 35-48x faster across 4 worktrees, and uses 26-50x less disk" src="benchmark/charts/synthetic-speed-light.svg" width="840">
 </picture>
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="benchmark/charts/bench-accuracy-dark.svg">
-  <img alt="Call-edge recall: grepum 99.3-100%, graphify 40.5-92.2%. Precision: grepum 100% on all three projects, graphify 100%, 100% and 86.6%" src="benchmark/charts/bench-accuracy-light.svg" width="840">
+  <source media="(prefers-color-scheme: dark)" srcset="benchmark/charts/synthetic-accuracy-dark.svg">
+  <img alt="Call-edge recall: grepum 99.3-100%, graphify 40.5-92.2%. Precision: grepum 100% on all three projects, graphify 100%, 100% and 86.6%" src="benchmark/charts/synthetic-accuracy-light.svg" width="840">
 </picture>
-
-`benchmark/` has a generator for three fake projects (TypeScript, Python,
-Unreal Engine 5 C++) with a known call graph, and
-a harness that runs grepum and [graphify](https://github.com/Graphify-Labs/graphify)
-through the same worktree workflow:
-
-```
-cargo build --release
-python3 benchmark/generate.py   # writes the projects + ground truth (not committed)
-python3 benchmark/bench.py --graphify $(which graphify)
-python3 benchmark/charts.py     # redraws the charts above from the results
-```
-
-Full numbers, including warm re-index, query latency and hard cases, are in
-[`benchmark/results/latest.md`](benchmark/results/latest.md); every run is
-also kept in [`benchmark/results/runs/`](benchmark/results/runs/) with the
-machine, commit and tool versions.
 
 Caveat: the same author wrote the generator and the resolver, and the
 resolver was tuned against these projects. They use common idioms, but treat
 the accuracy numbers as a regression suite, not proof of accuracy on real code.
+
+### Running it
+
+```
+cargo build --release
+python3 benchmark/generate.py   # writes the synthetic projects + ground truth (not committed)
+python3 benchmark/bench.py --graphify $(which graphify)   # --set synthetic|real|all
+python3 benchmark/charts.py     # redraws the charts above
+```
+
+Real repos are shallow-cloned into `benchmark/repos/` (gitignored) on first
+use; the list and tags are in [`benchmark/real_repos.json`](benchmark/real_repos.json).
+Full numbers, including warm re-index, query latency and edge counts, are in
+[`benchmark/results/`](benchmark/results/), and every run is kept in
+[`benchmark/results/runs/`](benchmark/results/runs/) with the machine, commit
+and tool versions.
 
 ## Status
 

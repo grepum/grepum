@@ -1,0 +1,359 @@
+{
+ "meta": {
+  "date": "2026-11-20T09:26:17Z",
+  "machine": "Apple M2 Max, Darwin 25.5.0",
+  "grepum": "0.1.0",
+  "commit": "01bc638",
+  "graphify": "graphify 0.9.112",
+  "reps": 3
+ },
+ "results": {
+  "shopfront": {
+   "grepum": {
+    "cold": 0.07810654188506305,
+    "warm": 0.02308791712857783,
+    "edit": 0.03348216600716114,
+    "worktree_each": [
+     0.043471541022881866,
+     0.043217499973252416,
+     0.04306662501767278,
+     0.043048459105193615
+    ],
+    "worktrees_total": 0.17280412511900067,
+    "query": 0.02330704196356237,
+    "other_rev": 0.012556999921798706,
+    "disk": 501368,
+    "accuracy": {
+     "precision": 1.0,
+     "recall": 0.9943938332165382,
+     "f1": 0.9971890372452565,
+     "tp": 1419,
+     "fp": 0,
+     "fn": 8,
+     "hard": {
+      "untyped-param": [
+       0,
+       8
+      ]
+     },
+     "fp_examples": [],
+     "fn_examples": [
+      [
+       "src/api/routes/coupon.ts:7",
+       "src/domain/coupon/service.ts:41"
+      ],
+      [
+       "src/api/routes/label.ts:7",
+       "src/domain/label/service.ts:41"
+      ],
+      [
+       "src/api/routes/order.ts:7",
+       "src/domain/order/service.ts:41"
+      ],
+      [
+       "src/api/routes/plan.ts:7",
+       "src/domain/plan/service.ts:41"
+      ],
+      [
+       "src/api/routes/price.ts:7",
+       "src/domain/price/service.ts:41"
+      ]
+     ]
+    }
+   },
+   "graphify": {
+    "cold": 2.061295500025153,
+    "warm": 0.24288979195989668,
+    "edit": 1.967181958956644,
+    "worktree_each": [
+     2.0741390839684755,
+     2.093914750032127,
+     2.057176499860361,
+     2.058498041005805
+    ],
+    "worktrees_total": 8.283728374866769,
+    "query": 0.15477383392862976,
+    "disk": 13168357,
+    "accuracy": {
+     "precision": 1.0,
+     "recall": 0.7561317449194114,
+     "f1": 0.8611332801276935,
+     "tp": 1079,
+     "fp": 0,
+     "fn": 348,
+     "hard": {
+      "untyped-param": [
+       0,
+       8
+      ]
+     },
+     "fp_examples": [],
+     "fn_examples": [
+      [
+       "src/api/routes/audit.ts:7",
+       "src/domain/audit/service.ts:16"
+      ],
+      [
+       "src/api/routes/audit.ts:7",
+       "src/domain/audit/service.ts:28"
+      ],
+      [
+       "src/api/routes/audit.ts:7",
+       "src/domain/audit/service.ts:35"
+      ],
+      [
+       "src/api/routes/batch.ts:7",
+       "src/domain/batch/service.ts:16"
+      ],
+      [
+       "src/api/routes/batch.ts:7",
+       "src/domain/batch/service.ts:28"
+      ]
+     ]
+    }
+   }
+  },
+  "datapipe": {
+   "grepum": {
+    "cold": 0.07611420820467174,
+    "warm": 0.02254012506455183,
+    "edit": 0.03267129207961261,
+    "worktree_each": [
+     0.041281916899606586,
+     0.041975875152274966,
+     0.041291333036497235,
+     0.04142999998293817
+    ],
+    "worktrees_total": 0.16597912507131696,
+    "query": 0.022903499891981483,
+    "other_rev": 0.012502624886110425,
+    "disk": 547355,
+    "accuracy": {
+     "precision": 1.0,
+     "recall": 0.9929203539823008,
+     "f1": 0.9964476021314387,
+     "tp": 1683,
+     "fp": 0,
+     "fn": 12,
+     "hard": {
+      "super()": [
+       60,
+       60
+      ],
+      "untyped-param": [
+       0,
+       12
+      ],
+      "chained-call": [
+       60,
+       60
+      ]
+     },
+     "fp_examples": [],
+     "fn_examples": [
+      [
+       "datapipe/pipelines/coupon_pipeline.py:6",
+       "datapipe/stages/coupon_stage.py:13"
+      ],
+      [
+       "datapipe/pipelines/dashboard_pipeline.py:6",
+       "datapipe/stages/dashboard_stage.py:13"
+      ],
+      [
+       "datapipe/pipelines/device_pipeline.py:6",
+       "datapipe/stages/device_stage.py:13"
+      ],
+      [
+       "datapipe/pipelines/feature_pipeline.py:6",
+       "datapipe/stages/feature_stage.py:13"
+      ],
+      [
+       "datapipe/pipelines/label_pipeline.py:6",
+       "datapipe/stages/label_stage.py:13"
+      ]
+     ]
+    }
+   },
+   "graphify": {
+    "cold": 1.4311590839643031,
+    "warm": 0.24452566704712808,
+    "edit": 1.0993990420829505,
+    "worktree_each": [
+     1.4566460829228163,
+     1.454339207848534,
+     1.4477809581439942,
+     1.4488406251184642
+    ],
+    "worktrees_total": 5.807606874033809,
+    "query": 0.15181337506510317,
+    "disk": 21297854,
+    "accuracy": {
+     "precision": 1.0,
+     "recall": 0.9215339233038348,
+     "f1": 0.9591648756524408,
+     "tp": 1562,
+     "fp": 0,
+     "fn": 133,
+     "hard": {
+      "super()": [
+       60,
+       60
+      ],
+      "untyped-param": [
+       0,
+       12
+      ],
+      "chained-call": [
+       0,
+       60
+      ]
+     },
+     "fp_examples": [],
+     "fn_examples": [
+      [
+       "datapipe/core/pipeline.py:9",
+       "datapipe/core/registry.py:5"
+      ],
+      [
+       "datapipe/pipelines/address_pipeline.py:14",
+       "datapipe/connectors/salesforce.py:16"
+      ],
+      [
+       "datapipe/pipelines/address_pipeline.py:14",
+       "datapipe/core/pipeline.py:14"
+      ],
+      [
+       "datapipe/pipelines/alert_pipeline.py:14",
+       "datapipe/connectors/s3.py:16"
+      ],
+      [
+       "datapipe/pipelines/alert_pipeline.py:14",
+       "datapipe/core/pipeline.py:14"
+      ]
+     ]
+    }
+   }
+  },
+  "arena": {
+   "grepum": {
+    "cold": 0.06806004093959928,
+    "warm": 0.023093292023986578,
+    "edit": 0.03113449993543327,
+    "worktree_each": [
+     0.03952129208482802,
+     0.039773790864273906,
+     0.03962583397515118,
+     0.0393973751924932
+    ],
+    "worktrees_total": 0.1583182921167463,
+    "query": 0.022824499988928437,
+    "other_rev": 0.012182666920125484,
+    "disk": 296444,
+    "accuracy": {
+     "precision": 1.0,
+     "recall": 1.0,
+     "f1": 1.0,
+     "tp": 430,
+     "fp": 0,
+     "fn": 0,
+     "hard": {
+      "ue-rpc": [
+       27,
+       27
+      ],
+      "callback-binding": [
+       2,
+       2
+      ],
+      "chained-call": [
+       87,
+       87
+      ]
+     },
+     "fp_examples": [],
+     "fn_examples": []
+    }
+   },
+   "graphify": {
+    "cold": 1.595760874915868,
+    "warm": 0.23711187508888543,
+    "edit": 1.6177475419826806,
+    "worktree_each": [
+     1.5911168749444187,
+     1.5935014160349965,
+     1.611341250129044,
+     1.598418875131756
+    ],
+    "worktrees_total": 6.394378416240215,
+    "query": 0.15472783311270177,
+    "disk": 14733990,
+    "accuracy": {
+     "precision": 0.8656716417910447,
+     "recall": 0.4046511627906977,
+     "f1": 0.5515055467511886,
+     "tp": 174,
+     "fp": 27,
+     "fn": 256,
+     "hard": {
+      "ue-rpc": [
+       0,
+       27
+      ],
+      "callback-binding": [
+       0,
+       2
+      ],
+      "chained-call": [
+       0,
+       87
+      ]
+     },
+     "fp_examples": [
+      [
+       "Source/Arena/Private/Weapons/ArenaWeapon.cpp:12",
+       "Source/Arena/Public/Weapons/ArenaWeapon.h:24"
+      ],
+      [
+       "Source/Arena/Private/Weapons/ArenaWeapon.cpp:12",
+       "Source/Arena/Public/Weapons/ArenaWeapon.h:27"
+      ],
+      [
+       "Source/Arena/Private/Weapons/Blaster.cpp:10",
+       "Source/Arena/Public/Weapons/Blaster.h:18"
+      ],
+      [
+       "Source/Arena/Private/Weapons/Boomstick.cpp:10",
+       "Source/Arena/Public/Weapons/Boomstick.h:18"
+      ],
+      [
+       "Source/Arena/Private/Weapons/BurstRifle.cpp:10",
+       "Source/Arena/Public/Weapons/BurstRifle.h:18"
+      ]
+     ],
+     "fn_examples": [
+      [
+       "Source/Arena/Private/ArenaGameMode.cpp:13",
+       "Source/Arena/Private/Subsystems/ScoreSubsystem.cpp:17"
+      ],
+      [
+       "Source/Arena/Private/Characters/ArenaCharacter.cpp:15",
+       "Source/Arena/Private/Characters/ArenaCharacter.cpp:49"
+      ],
+      [
+       "Source/Arena/Private/Characters/ArenaCharacter.cpp:26",
+       "Source/Arena/Private/Characters/ArenaCharacter.cpp:35"
+      ],
+      [
+       "Source/Arena/Private/Characters/ArenaCharacter.cpp:35",
+       "Source/Arena/Private/Weapons/ArenaWeapon.cpp:12"
+      ],
+      [
+       "Source/Arena/Private/Characters/ArenaCharacter.cpp:49",
+       "Source/Arena/Private/Components/HealthComponent.cpp:31"
+      ]
+     ]
+    }
+   }
+  }
+ }
+}
