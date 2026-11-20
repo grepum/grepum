@@ -48,6 +48,8 @@ grepum callees run_order
 grepum context "checkout payment"   # compact neighbourhood, sized for an agent prompt
 grepum diff main                 # symbols + call edges added/removed vs main
 grepum --rev v1.2 callers save   # query any commit, no checkout needed
+grepum log Flask.wsgi_app         # commits that added/modified/moved/removed it, across files
+grepum find json encoder --history   # also finds deleted symbols + the commit to `git show`
 grepum summary                   # short orientation for an agent's context
 grepum hooks install             # keep the graph warm after commit/checkout/merge/rebase
 ```
@@ -74,6 +76,15 @@ Any command takes `--json`.
    files; only those are hashed and parsed, then the graph is re-linked. The
    overlay is keyed by the exact dirty state and lives in the worktree's
    private git dir.
+
+**History.** `git log --raw` lists the old and new blob ids of every file a
+commit touched, without reading any contents. Each definition in L1 carries a
+whitespace-insensitive fingerprint of its body, so comparing a commit's
+before/after facts gives added, modified, moved and removed symbols. Old
+versions mostly share blobs, so only never-seen versions are parsed, and each
+commit's result is cached by commit id. On flask's 2,283 first-parent commits
+the first `grepum log` takes ~1.2 s and later ones ~60 ms, following
+`Flask.wsgi_app` back to its 2010 origin in `flask.py` across two file moves.
 
 Resolution is conservative. Edges are `exact` when proven by scope, imports
 or types, `inferred` when the name is globally unique, and dropped when

@@ -26,6 +26,29 @@ pub struct TreeEntry {
     pub oid: String,
 }
 
+/// One commit of `git log --raw`, diffed against its first parent.
+#[derive(Clone, Debug)]
+pub struct Commit {
+    pub oid: String,
+    pub time: i64,
+    pub author: String,
+    pub subject: String,
+    pub files: Vec<FileChange>,
+}
+
+#[derive(Clone, Debug)]
+pub struct FileChange {
+    pub path: String,
+    /// All-zero when the file was added.
+    pub old: String,
+    /// All-zero when the file was deleted.
+    pub new: String,
+}
+
+pub fn is_null_oid(oid: &str) -> bool {
+    oid.bytes().all(|b| b == b'0')
+}
+
 #[derive(Debug)]
 pub enum Change {
     /// Path exists in the worktree with content that differs from HEAD (or is new).
@@ -148,6 +171,57 @@ impl Repo {
         writer.join().map_err(|_| anyhow::anyhow!("writer panicked"))??;
         child.wait()?;
         Ok(result)
+    }
+
+    /// First-parent history of `rev`, newest first, with the blob ids of every
+    /// changed file. Reads only commit and tree objects, never file contents.
+    pub fn log_raw(&self, rev: &str, max_commits: Option<usize>) -> Result<Vec<Commit>> {
+        let mut cmd = self.cmd();
+        cmd.args([
+            "log", "--first-parent", "--diff-merges=first-parent", "--no-renames", "--raw", "--no-abbrev", "-z",
+            "--format=%x01%H%x00%ct%x00%an%x00%s%x00",
+        ]);
+        if let Some(n) = max_commits {
+            cmd.arg(format!("--max-count={n}"));
+        }
+        cmd.arg(rev).arg("--");
+        let out = run(&mut cmd)?;
+        let text = String::from_utf8_lossy(&out);
+        let mut commits = vec![];
+        for chunk in text.split('\u{1}').filter(|c| !c.is_empty()) {
+            let mut fields = chunk.split('\0');
+            let (Some(oid), Some(time), Some(author), Some(subject)) = (fields.next(), fields.next(), fields.next(), fields.next())
+            else {
+                continue;
+            };
+            let mut files = vec![];
+            let mut meta: Option<&str> = None;
+            for tok in fields {
+                let tok = tok.trim_start_matches('\n');
+                if tok.is_empty() {
+                    continue;
+                }
+                match meta.take() {
+                    None if tok.starts_with(':') => meta = Some(tok),
+                    None => {}
+                    Some(m) => {
+                        // ":100644 100644 <old> <new> M"
+                        let parts: Vec<&str> = m.split(' ').collect();
+                        if parts.len() >= 5 {
+                            files.push(FileChange { path: tok.to_string(), old: parts[2].to_string(), new: parts[3].to_string() });
+                        }
+                    }
+                }
+            }
+            commits.push(Commit {
+                oid: oid.to_string(),
+                time: time.parse().unwrap_or(0),
+                author: author.to_string(),
+                subject: subject.to_string(),
+                files,
+            });
+        }
+        Ok(commits)
     }
 
     /// Paths whose worktree content differs from HEAD, including untracked,

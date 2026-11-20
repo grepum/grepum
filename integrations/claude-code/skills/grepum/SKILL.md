@@ -19,6 +19,8 @@ including uncommitted edits**. There is no index step to remember.
 | Orient on a feature | `grepum context <words>`: matches plus 1-hop callers and callees |
 | What did this branch change? | `grepum diff main`: symbols and call edges added or removed |
 | Same question on another branch/commit | add `--rev <rev>` to any command; no checkout needed |
+| When/why did this function change? Where did it come from? | `grepum log Class.method`: commits that added, modified, moved (across files) or removed it |
+| There used to be a function for X; where did it go? | `grepum find <words> --history`: also lists deleted symbols with the commit that removed them and a `git show <commit>^:<path>` to read the last version |
 
 Symbols can be written `Name`, `Class.method`, `Class::Method`, or
 `path/suffix.py:Class.method` to disambiguate. Add `--json` for structured

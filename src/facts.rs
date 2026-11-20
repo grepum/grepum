@@ -50,7 +50,7 @@ impl Lang {
     }
 }
 
-#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum DefKind {
     Function,
     Method,
@@ -104,6 +104,9 @@ pub struct Def {
     pub decl: bool,
     /// Annotations that change meaning, e.g. Unreal `UFUNCTION(Server, Reliable)` specifiers.
     pub attrs: Vec<String>,
+    /// Fingerprint of the definition's source text, whitespace ignored. Lets
+    /// history queries tell "changed" from "unchanged" without the source.
+    pub body: u64,
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]

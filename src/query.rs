@@ -9,7 +9,7 @@ pub fn loc(g: &Graph, d: u32) -> String {
     format!("{}:{}", g.files[def.file as usize].path, def.line)
 }
 
-fn words(s: &str) -> Vec<String> {
+pub fn words(s: &str) -> Vec<String> {
     let mut out = vec![];
     let mut cur = String::new();
     let mut prev_lower = false;

@@ -2,6 +2,7 @@ mod extract;
 mod facts;
 mod git;
 mod graph;
+mod history;
 mod install;
 mod query;
 mod snapshot;
@@ -53,6 +54,19 @@ enum Cmd {
         query: Vec<String>,
         #[arg(short, long, default_value_t = 15)]
         limit: usize,
+        /// Also search symbols that were deleted in the history of HEAD (or --rev).
+        #[arg(long)]
+        history: bool,
+    },
+    /// History of a symbol: the commits that added, modified, moved or removed it.
+    Log {
+        symbol: String,
+        /// Show at most this many events.
+        #[arg(short = 'n', long, default_value_t = 30)]
+        limit: usize,
+        /// Only look at the newest N commits.
+        #[arg(long)]
+        max_commits: Option<usize>,
     },
     /// Who calls this symbol (transitively with --depth).
     Callers {
@@ -137,6 +151,51 @@ fn snapshot(repo: &Repo, store: &Store, rev: Option<&str>, rebuild: bool) -> Res
         Some(r) => snapshot::for_rev(repo, store, r, rebuild),
         None => snapshot::for_worktree(repo, store, rebuild),
     }
+}
+
+/// Deleted symbols ranked by how well their names match the query words.
+fn rank_deleted<'a>(gone: &[&'a history::Event], q: &str, limit: usize) -> Vec<&'a history::Event> {
+    let qt: Vec<String> = q.split_whitespace().flat_map(query::words).collect();
+    let mut scored: Vec<(f64, usize)> = gone
+        .iter()
+        .enumerate()
+        .filter_map(|(i, e)| {
+            let toks = query::words(&e.qual);
+            let mut s = 0.0;
+            let mut hit = 0;
+            for t in &qt {
+                let best = toks
+                    .iter()
+                    .map(|x| if x == t { 1.0 } else if x.starts_with(t.as_str()) { 0.6 } else if x.contains(t.as_str()) { 0.3 } else { 0.0 })
+                    .fold(0.0, f64::max);
+                if best > 0.0 {
+                    hit += 1;
+                }
+                s += best;
+            }
+            (hit > 0).then(|| (s * (hit as f64 / qt.len() as f64).powi(2), i))
+        })
+        .collect();
+    scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap().then(a.1.cmp(&b.1)));
+    scored.into_iter().take(limit).map(|(_, i)| gone[i]).collect()
+}
+
+/// UTC date of a unix timestamp (civil-from-days, no date library needed).
+fn date(ts: i64) -> String {
+    let z = ts.div_euclid(86_400) + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = yoe + era * 400 + i64::from(m <= 2);
+    format!("{y:04}-{m:02}-{d:02}")
+}
+
+fn truncate(s: &str, n: usize) -> String {
+    if s.chars().count() <= n { s.to_string() } else { format!("{}…", s.chars().take(n - 1).collect::<String>()) }
 }
 
 fn print_json(v: &serde_json::Value) {
@@ -266,7 +325,7 @@ fn main() -> Result<()> {
             }
             println!("  query it: grepum find <words> | callers <Symbol> | callees <Symbol> | context <words> | diff <rev>");
         }
-        Cmd::Find { query, limit } => {
+        Cmd::Find { query, limit, history } => {
             let s = snapshot(&repo, &store, rev, false)?;
             let idx = query::Index::new(&s.graph);
             let hits = query::find(&s.graph, &idx, &query.join(" "), limit);
@@ -285,6 +344,55 @@ fn main() -> Result<()> {
                     let tags = if def.attrs.is_empty() { String::new() } else { format!("  [{}]", def.attrs.join(", ")) };
                     println!("{:<9} {:<40} {}{tags}", def.kind.label(), def.qual, query::loc(&s.graph, d));
                 }
+            }
+            if history {
+                let t = std::time::Instant::now();
+                let h = history::scan(&repo, &store, rev.unwrap_or("HEAD"), None)?;
+                let current: std::collections::HashSet<String> =
+                    s.graph.defs.iter().filter(|d| !d.decl).map(|d| d.qual.clone()).collect();
+                let gone = history::deleted(&h, &current);
+                let ranked = rank_deleted(&gone, &query.join(" "), limit);
+                if cli.json {
+                    print_json(&serde_json::json!({"deleted": ranked}));
+                } else {
+                    println!();
+                    if ranked.is_empty() {
+                        println!("no deleted symbols match ({} commits searched)", h.commits);
+                    } else {
+                        println!("deleted symbols ({} commits searched in {:.0} ms):", h.commits, t.elapsed().as_secs_f64() * 1e3);
+                        for e in ranked {
+                            let short = &e.commit[..10.min(e.commit.len())];
+                            println!(
+                                "{:<9} {:<40} {}:{}  removed {} in {short}  (git show {short}^:{})",
+                                e.kind, e.qual, e.path, e.line, date(e.time), e.path
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        Cmd::Log { ref symbol, limit, max_commits } => {
+            let t = std::time::Instant::now();
+            let h = history::scan(&repo, &store, rev.unwrap_or("HEAD"), max_commits)?;
+            let hits: Vec<&history::Event> = h.events.iter().filter(|e| history::matches(e, symbol)).take(limit).collect();
+            if cli.json {
+                print_json(&serde_json::json!({"symbol": symbol, "commits_searched": h.commits, "events": hits}));
+            } else {
+                if hits.is_empty() {
+                    println!("no history for {symbol} in {} commits", h.commits);
+                }
+                for e in &hits {
+                    let from = e.from.as_ref().map(|f| format!(" (from {f})")).unwrap_or_default();
+                    println!(
+                        "{}  {}  {:<8}  {:<6} {}  {}:{}{from}  {}",
+                        date(e.time), &e.commit[..10.min(e.commit.len())], e.change.label(), e.kind, e.qual, e.path, e.line,
+                        truncate(&e.subject, 60)
+                    );
+                }
+                eprintln!(
+                    "{} commits searched in {:.0} ms ({} from cache; {} file versions parsed, {} reused)",
+                    h.commits, t.elapsed().as_secs_f64() * 1e3, h.commits_cached, h.parsed, h.cached
+                );
             }
         }
         Cmd::Callers { ref symbol, depth } | Cmd::Callees { ref symbol, depth } => {

@@ -16,7 +16,7 @@ use serde::{de::DeserializeOwned, Serialize};
 use std::path::{Path, PathBuf};
 
 /// Bump whenever extraction or resolution output changes meaning.
-pub const SCHEMA: u32 = 3;
+pub const SCHEMA: u32 = 4;
 
 pub struct Store {
     pub shared: PathBuf,
@@ -42,6 +42,12 @@ impl Store {
 
     pub fn tree_path(&self, tree: &str) -> PathBuf {
         self.shared.join("trees").join(format!("{tree}.graph"))
+    }
+
+    /// Symbol changes a commit made relative to its first parent (immutable, so shared).
+    pub fn commit_path(&self, commit: &str) -> PathBuf {
+        let (a, b) = commit.split_at(2);
+        self.shared.join("commits").join(a).join(format!("{b}.delta"))
     }
 
     pub fn overlay_path(&self) -> PathBuf {
