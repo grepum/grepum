@@ -29,7 +29,6 @@ Other ways to get the binary:
 
 ```
 grepum upgrade                                    # update an installed grepum to the latest release
-cargo install grepum --locked                     # from crates.io (needs Rust)
 ./install.sh --from-source                        # from a checkout (needs Rust)
 powershell -c "irm https://github.com/grepum/grepum/releases/latest/download/grepum-installer.ps1 | iex"   # Windows
 ```
