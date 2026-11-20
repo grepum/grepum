@@ -1,6 +1,6 @@
 # grepum
 
-*grep 'em: every definition, caller and callee, in every worktree.*
+<img src="docs/explainer/title.png" alt="grepum: grep 'em: every definition, caller and callee, in every worktree." width="840">
 
 A code graph woven into git. Definitions, calls, imports and inheritance for
 Python, TypeScript/JavaScript, Rust, Go and C/C++ (with Unreal Engine 5
@@ -58,6 +58,10 @@ Any command takes `--json`.
 
 ## How it works
 
+<img src="docs/explainer/parsed-once.png" alt="Same content, parsed once: 12 file versions across main, feature and v1.2 reduce to 5 unique contents by git id, each parsed once into a shared cache." width="840">
+
+<img src="docs/explainer/worktrees.png" alt="Worktrees share one cache: main, feature, fix and a new worktree all use one shared cache of files and graphs; each keeps only its own edits. A new worktree re-links and never re-parses. 4 worktrees: 0.2-0.3 s vs 7-18 s." width="840">
+
 ```
 <git-common-dir>/grepum/<ver>/blobs/ab/<oid>.<lang>   L1: facts per file content   (shared by all worktrees)
 <git-common-dir>/grepum/<ver>/trees/<tree>.graph      L2: resolved graph per tree  (shared)
@@ -76,6 +80,8 @@ Any command takes `--json`.
    files; only those are hashed and parsed, then the graph is re-linked. The
    overlay is keyed by the exact dirty state and lives in the worktree's
    private git dir.
+
+<img src="docs/explainer/history.png" alt="History without checkout: across a timeline of commits only the changed file versions are read, and one symbol's lifeline shows it added, changed, moved and deleted. grepum log &lt;symbol&gt;." width="840">
 
 **History.** `git log --raw` lists the old and new blob ids of every file a
 commit touched, without reading any contents. Each definition in L1 carries a
@@ -114,6 +120,8 @@ not replaced, and `uninstall` restores it. The same files are packaged as a
 plugin in `integrations/claude-code/`; see its README.
 
 ## Benchmarks
+
+<img src="docs/explainer/benchmarks.png" alt="Benchmarks, grepum vs graphify, median of 5 open-source repos: 26x faster cold index, 44x faster re-index after an edit, 41x faster for 4 new worktrees, 36x less disk." width="840">
 
 grepum against [graphify](https://github.com/Graphify-Labs/graphify) (`graphify update .`,
 AST only) through the same worktree workflow, on two sets of projects.
