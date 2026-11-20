@@ -5,90 +5,10 @@
 //! name is globally unique, and dropped when it is ambiguous. A missing edge
 //! is cheaper for an agent than a confidently wrong one.
 
-use crate::facts::*;
-use crate::js_project::JsProject;
+use super::*;
+use crate::lang::{self, dir_of, Modules, Rules, Target};
 use rayon::prelude::*;
-use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
-
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct GFile {
-    pub path: String,
-    pub oid: String,
-    pub lang: Lang,
-    pub lines: u32,
-    pub first_def: u32,
-    pub def_count: u32,
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct GDef {
-    pub file: u32,
-    pub name: String,
-    pub qual: String,
-    pub kind: DefKind,
-    pub line: u32,
-    pub end_line: u32,
-    pub parent: Option<u32>,
-    pub owner: Option<String>,
-    pub decl: bool,
-    pub attrs: Vec<String>,
-}
-
-#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum EdgeKind {
-    Call,
-    Inherit,
-}
-
-#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum Conf {
-    Exact,
-    Inferred,
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct Edge {
-    pub from_file: u32,
-    pub from_def: Option<u32>,
-    pub to: u32,
-    pub kind: EdgeKind,
-    pub conf: Conf,
-    pub line: u32,
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug, Default)]
-pub struct Stats {
-    pub refs: u64,
-    pub exact: u64,
-    pub inferred: u64,
-    pub ambiguous: u64,
-    pub unresolved: u64,
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug, Default)]
-pub struct Graph {
-    pub files: Vec<GFile>,
-    pub defs: Vec<GDef>,
-    pub edges: Vec<Edge>,
-    /// importer file -> imported file
-    pub imports: Vec<(u32, u32)>,
-    pub stats: Stats,
-}
-
-pub struct Input {
-    pub path: String,
-    pub oid: String,
-    pub facts: Arc<FileFacts>,
-}
-
-#[derive(Clone, Debug)]
-enum Target {
-    Module(String, Vec<u32>),
-    Symbol(Vec<u32>, String),
-    External,
-}
 
 #[derive(Clone, Debug)]
 enum Thing {
@@ -96,6 +16,15 @@ enum Thing {
     Module(String, Vec<u32>),
     Unknown,
     External,
+}
+
+/// What a call names: `qualifier.name(...)`, on `line` (0 when unknown: then
+/// only parameters, not later locals, shadow the name).
+#[derive(Clone, Copy)]
+struct Callee<'c> {
+    name: &'c str,
+    qualifier: Option<&'c str>,
+    line: u32,
 }
 
 struct FileCtx {
@@ -115,84 +44,31 @@ struct Resolver<'a> {
     top_level: HashMap<(u32, String), Vec<u32>>,
     methods: HashMap<(String, String), Vec<u32>>,
     owner_fields: HashMap<(String, String), Vec<(u32, TypeHint)>>,
-    py_modules: HashMap<String, Vec<(u32, u8)>>,
-    js_paths: HashMap<String, u32>,
     dirs: HashMap<String, Vec<u32>>,
-    rust_mods: HashMap<String, Vec<u32>>,
-    /// C/C++ files by basename, for `#include "x/y.h"` suffix matching.
-    cpp_files: HashMap<String, Vec<u32>>,
+    /// Each language's module index, by language name.
+    modules: HashMap<&'static str, Box<dyn Modules>>,
     ctx: Vec<FileCtx>,
     bases: HashMap<u32, Vec<u32>>,
     /// (enclosing function, name) -> functions nested in it.
     nested: HashMap<(u32, String), Vec<u32>>,
-    js: JsProject,
-}
-
-/// Method names that standard containers, strings, promises and streams also
-/// have. A call to one of these on a receiver of unknown type is far more
-/// likely to hit the builtin than a uniquely-named local method.
-const COMMON_METHODS: &[&str] = &[
-    "get", "set", "add", "has", "delete", "remove", "clear", "pop", "push", "append", "extend", "insert", "update",
-    "items", "keys", "values", "entries", "copy", "sort", "reverse", "index", "count", "find", "filter", "map",
-    "reduce", "forEach", "some", "every", "includes", "join", "split", "slice", "splice", "concat", "strip",
-    "lower", "upper", "replace", "format", "startswith", "endswith", "encode", "decode", "read", "write",
-    "close", "open", "send", "emit", "on", "then", "catch", "finally", "json", "toString", "next", "len",
-    "unwrap", "expect", "clone", "iter", "into", "as_str", "to_string", "is_empty", "Error", "String",
-    // C++ / Unreal containers, delegates and handles
-    "Add", "AddUnique", "Num", "Remove", "RemoveAt", "Contains", "Find", "FindRef", "Empty", "Reset", "Get",
-    "IsValid", "Broadcast", "AddDynamic", "RemoveDynamic", "AddUObject", "AddLambda", "BindUObject",
-    "BindLambda", "Execute", "ExecuteIfBound", "IsBound", "ToString", "size", "begin", "end", "empty",
-    "push_back", "emplace_back", "erase", "at", "data", "c_str", "reset", "release", "lock",
-];
-
-/// Browser and Node globals: a call on one of these is never a project method.
-const JS_GLOBALS: &[&str] = &[
-    "console", "Math", "JSON", "Object", "Array", "Promise", "Reflect", "Number", "String", "Boolean", "Symbol",
-    "Date", "RegExp", "Error", "Intl", "BigInt", "Map", "Set", "WeakMap", "WeakSet", "Atomics", "Proxy", "window",
-    "document", "globalThis", "self", "process", "navigator", "localStorage", "sessionStorage", "location",
-    "history", "performance", "crypto", "Buffer", "URL", "URLSearchParams", "Response", "Request", "Headers",
-    "require", "module", "exports",
-];
-
-fn dir_of(path: &str) -> &str {
-    path.rsplit_once('/').map(|(d, _)| d).unwrap_or("")
-}
-
-fn strip_ext(path: &str) -> &str {
-    match path.rsplit_once('.') {
-        Some((p, _)) if !p.ends_with('/') => p,
-        _ => path,
-    }
-}
-
-fn normalize_path(path: &str) -> String {
-    let mut out: Vec<&str> = vec![];
-    for seg in path.split('/') {
-        match seg {
-            "" | "." => {}
-            ".." => {
-                out.pop();
-            }
-            s => out.push(s),
-        }
-    }
-    out.join("/")
 }
 
 fn qual_segments(q: &str) -> Vec<&str> {
     q.split("::").flat_map(|s| s.split('.')).filter(|s| !s.is_empty()).collect()
 }
 
-pub fn build(inputs: Vec<Input>, js: JsProject) -> Graph {
-    let mut r = Resolver::new(&inputs, js);
+pub(super) fn link(inputs: Vec<Input>, project: &[(String, Vec<u8>)]) -> Graph {
+    let mut r = Resolver::new(&inputs, project);
     r.build_contexts();
     r.resolve_inherits();
     let per_file: Vec<(Vec<Edge>, Stats)> = (0..inputs.len()).into_par_iter().map(|fi| r.resolve_file(fi as u32)).collect();
     let mut stats = Stats::default();
     let mut edges = vec![];
-    for (bi, bases) in &r.bases {
+    let mut subclasses: Vec<&u32> = r.bases.keys().collect();
+    subclasses.sort();
+    for bi in subclasses {
         let d = &r.defs[*bi as usize];
-        for b in bases {
+        for b in &r.bases[bi] {
             edges.push(Edge { from_file: d.file, from_def: Some(*bi), to: *b, kind: EdgeKind::Inherit, conf: Conf::Exact, line: d.line });
         }
     }
@@ -226,11 +102,12 @@ pub fn build(inputs: Vec<Input>, js: JsProject) -> Graph {
             }
         }
     }
+    imports.sort();
     Graph { files: r.files, defs: r.defs, edges, imports, stats }
 }
 
 impl<'a> Resolver<'a> {
-    fn new(inputs: &'a [Input], js: JsProject) -> Self {
+    fn new(inputs: &'a [Input], project: &[(String, Vec<u8>)]) -> Self {
         let mut files = Vec::with_capacity(inputs.len());
         let mut defs = Vec::new();
         for (fi, inp) in inputs.iter().enumerate() {
@@ -281,11 +158,7 @@ impl<'a> Resolver<'a> {
             }
         }
         let mut owner_fields: HashMap<(String, String), Vec<(u32, TypeHint)>> = HashMap::new();
-        let mut py_modules: HashMap<String, Vec<(u32, u8)>> = HashMap::new();
-        let mut js_paths = HashMap::new();
         let mut dirs: HashMap<String, Vec<u32>> = HashMap::new();
-        let mut rust_mods: HashMap<String, Vec<u32>> = HashMap::new();
-        let mut cpp_files: HashMap<String, Vec<u32>> = HashMap::new();
         for (fi, inp) in inputs.iter().enumerate() {
             let fi = fi as u32;
             for b in &inp.facts.bindings {
@@ -294,35 +167,8 @@ impl<'a> Resolver<'a> {
                 }
             }
             dirs.entry(dir_of(&inp.path).to_string()).or_default().push(fi);
-            match inp.facts.lang {
-                Lang::Python => {
-                    let mut p = strip_ext(&inp.path);
-                    if let Some(pkg) = p.strip_suffix("/__init__") {
-                        p = pkg;
-                    }
-                    let segs: Vec<&str> = p.split('/').collect();
-                    for skip in 0..segs.len() {
-                        py_modules.entry(segs[skip..].join(".")).or_default().push((fi, skip as u8));
-                    }
-                }
-                l if l.is_js_family() => {
-                    js_paths.insert(inp.path.clone(), fi);
-                    js_paths.entry(strip_ext(&inp.path).to_string()).or_insert(fi);
-                }
-                Lang::Cpp => {
-                    let base = inp.path.rsplit('/').next().unwrap_or(&inp.path).to_string();
-                    cpp_files.entry(base).or_default().push(fi);
-                }
-                Lang::Rust => {
-                    let p = strip_ext(&inp.path);
-                    let rel = p.rsplit_once("src/").map(|(_, r)| r).unwrap_or(p);
-                    let rel = rel.strip_suffix("/mod").unwrap_or(rel);
-                    let key = if rel == "lib" || rel == "main" { String::new() } else { rel.to_string() };
-                    rust_mods.entry(key).or_default().push(fi);
-                }
-                _ => {}
-            }
         }
+        let modules = lang::ALL.iter().map(|l| (l.name(), l.modules(&files, project))).collect();
         Resolver {
             inputs,
             files,
@@ -331,16 +177,20 @@ impl<'a> Resolver<'a> {
             top_level,
             methods,
             owner_fields,
-            py_modules,
-            js_paths,
             dirs,
-            rust_mods,
-            cpp_files,
+            modules,
             ctx: vec![],
             bases: HashMap::new(),
             nested,
-            js,
         }
+    }
+
+    fn rules(&self, file: u32) -> &'static Rules {
+        lang::support(self.files[file as usize].lang).rules()
+    }
+
+    fn modules(&self, file: u32) -> &dyn Modules {
+        self.modules[lang::support(self.files[file as usize].lang).name()].as_ref()
     }
 
     /// Defined inside a function body: only reachable from within it.
@@ -362,7 +212,7 @@ impl<'a> Resolver<'a> {
         let def = &self.defs[d as usize];
         match def.kind {
             DefKind::Interface | DefKind::Object => false,
-            DefKind::Type => !self.files[def.file as usize].lang.is_js_family(),
+            DefKind::Type => self.rules(def.file).type_aliases_callable,
             _ => true,
         }
     }
@@ -402,172 +252,8 @@ impl<'a> Resolver<'a> {
         self.files[file as usize].first_def + local
     }
 
-    // ---------- module resolution ----------
-
-    fn py_module(&self, key: &str) -> Option<Vec<u32>> {
-        let cands = self.py_modules.get(key)?;
-        let best = cands.iter().map(|(_, s)| *s).min()?;
-        Some(cands.iter().filter(|(_, s)| *s == best).map(|(f, _)| *f).collect())
-    }
-
-    fn py_absolute(&self, file: u32, module: &str) -> String {
-        let dots = module.chars().take_while(|c| *c == '.').count();
-        if dots == 0 {
-            return module.to_string();
-        }
-        let path = &self.files[file as usize].path;
-        let mut pkg: Vec<&str> = dir_of(path).split('/').filter(|s| !s.is_empty()).collect();
-        for _ in 1..dots {
-            pkg.pop();
-        }
-        let rest = &module[dots..];
-        if !rest.is_empty() {
-            pkg.push(rest);
-        }
-        pkg.join(".")
-    }
-
-    fn js_module(&self, file: u32, spec: &str) -> Option<u32> {
-        let importer = &self.files[file as usize].path;
-        let bases = if spec.starts_with('.') {
-            vec![normalize_path(&format!("{}/{}", dir_of(importer), spec))]
-        } else {
-            let mut c = self.js.candidates(importer, spec);
-            // Common bundler aliases when no tsconfig says otherwise.
-            if let Some(rest) = spec.strip_prefix("@/").or_else(|| spec.strip_prefix("~/")) {
-                c.push(format!("src/{rest}"));
-            }
-            c
-        };
-        bases.iter().find_map(|base| self.js_file(base))
-    }
-
-    /// The source file an import path names: exact, without its extension
-    /// (`./x.js` -> `x.ts`), or as a directory `index`.
-    fn js_file(&self, base: &str) -> Option<u32> {
-        let stem = strip_ext(base);
-        [base, stem, &format!("{base}/index"), &format!("{stem}/index")].into_iter().find_map(|c| self.js_paths.get(c).copied())
-    }
-
-    /// `#include "a/b.h"`: relative to the includer first, then any file whose
-    /// path ends with the include path, preferring the one sharing the most
-    /// leading directories with the includer (same module/plugin).
-    fn cpp_include(&self, file: u32, inc: &str) -> Option<u32> {
-        let me = &self.files[file as usize].path;
-        let base = inc.rsplit('/').next()?;
-        let cands = self.cpp_files.get(base)?;
-        let rel = normalize_path(&format!("{}/{}", dir_of(me), inc));
-        if let Some(f) = cands.iter().find(|f| self.files[**f as usize].path == rel) {
-            return Some(*f);
-        }
-        let suffix = format!("/{inc}");
-        let shared = |p: &str| me.split('/').zip(p.split('/')).take_while(|(a, b)| a == b).count();
-        cands
-            .iter()
-            .copied()
-            .filter(|f| {
-                let p = &self.files[*f as usize].path;
-                p == inc || p.ends_with(&suffix)
-            })
-            .max_by_key(|f| shared(&self.files[*f as usize].path))
-    }
-
-    fn go_package(&self, import_path: &str) -> Option<Vec<u32>> {
-        let mut best: Option<(&String, &Vec<u32>)> = None;
-        for (dir, files) in &self.dirs {
-            if dir.is_empty() || !files.iter().any(|f| self.files[*f as usize].lang == Lang::Go) {
-                continue;
-            }
-            if import_path == dir || import_path.ends_with(&format!("/{dir}")) {
-                if best.is_none_or(|(b, _)| dir.len() > b.len()) {
-                    best = Some((dir, files));
-                }
-            }
-        }
-        best.map(|(_, f)| f.iter().copied().filter(|f| self.files[*f as usize].lang == Lang::Go).collect())
-    }
-
-    fn rust_module(&self, file: u32, path: &str) -> Option<Vec<u32>> {
-        let segs: Vec<&str> = path.split("::").filter(|s| !s.is_empty()).collect();
-        let me = &self.files[file as usize].path;
-        let my_rel = strip_ext(me).rsplit_once("src/").map(|(_, r)| r.to_string()).unwrap_or_default();
-        let my_rel = my_rel.strip_suffix("/mod").unwrap_or(&my_rel).to_string();
-        let mut cur: Vec<String> = match segs.first() {
-            Some(&"crate") => vec![],
-            Some(&"self") => my_rel.split('/').filter(|s| !s.is_empty() && *s != "lib" && *s != "main").map(String::from).collect(),
-            Some(&"super") => {
-                let mut v: Vec<String> = my_rel.split('/').filter(|s| !s.is_empty()).map(String::from).collect();
-                v.pop();
-                v
-            }
-            _ => return None,
-        };
-        for s in &segs[1..] {
-            if *s == "super" {
-                cur.pop();
-            } else {
-                cur.push(s.to_string());
-            }
-        }
-        let key = cur.join("/");
-        let files = self.rust_mods.get(&key)?;
-        let crate_root = me.rsplit_once("src/").map(|(c, _)| c).unwrap_or("");
-        let same: Vec<u32> = files.iter().copied().filter(|f| self.files[*f as usize].path.starts_with(crate_root)).collect();
-        Some(if same.is_empty() { files.clone() } else { same })
-    }
-
-    fn import_target(&self, file: u32, lang: Lang, imp: &Import, name: Option<&str>) -> Target {
-        match lang {
-            Lang::Python => {
-                let abs = self.py_absolute(file, &imp.module);
-                match name {
-                    None => match self.py_module(&abs) {
-                        Some(f) => Target::Module(abs, f),
-                        None => Target::External,
-                    },
-                    Some(n) => {
-                        let sub = if abs.is_empty() { n.to_string() } else { format!("{abs}.{n}") };
-                        if let Some(f) = self.py_module(&sub) {
-                            return Target::Module(sub, f);
-                        }
-                        match self.py_module(&abs) {
-                            Some(f) => Target::Symbol(f, n.to_string()),
-                            None => Target::External,
-                        }
-                    }
-                }
-            }
-            l if l.is_js_family() => match self.js_module(file, &imp.module) {
-                Some(f) => match name {
-                    None => Target::Module(imp.module.clone(), vec![f]),
-                    Some(n) => Target::Symbol(vec![f], n.to_string()),
-                },
-                None => Target::External,
-            },
-            Lang::Cpp => match self.cpp_include(file, &imp.module) {
-                Some(f) => Target::Module(imp.module.clone(), vec![f]),
-                None => Target::External,
-            },
-            Lang::Go => match self.go_package(&imp.module) {
-                Some(f) => Target::Module(imp.module.clone(), f),
-                None => Target::External,
-            },
-            Lang::Rust => {
-                let full = match name {
-                    Some(n) if imp.module.is_empty() => n.to_string(),
-                    Some(n) => format!("{}::{n}", imp.module),
-                    None => imp.module.clone(),
-                };
-                if let Some(f) = self.rust_module(file, &full) {
-                    return Target::Module(full, f);
-                }
-                match (name, self.rust_module(file, &imp.module)) {
-                    (Some(n), Some(f)) => Target::Symbol(f, n.to_string()),
-                    _ => Target::External,
-                }
-            }
-            _ => Target::External,
-        }
+    fn import_target(&self, file: u32, imp: &Import, name: Option<&str>) -> Target {
+        self.modules(file).import(&self.files, file, imp, name)
     }
 
     fn build_contexts(&mut self) {
@@ -576,11 +262,11 @@ impl<'a> Resolver<'a> {
             .map(|fi| {
                 let fi = fi as u32;
                 let facts = &self.inputs[fi as usize].facts;
-                let lang = facts.lang;
+                let rules = self.rules(fi);
                 let mut c = FileCtx { imports: HashMap::new(), wildcards: vec![], reexports: vec![], bindings: HashMap::new(), locals: HashMap::new() };
                 for imp in &facts.imports {
                     if imp.wildcard {
-                        if let Target::Module(_, f) = self.import_target(fi, lang, imp, None) {
+                        if let Target::Module(_, f) = self.import_target(fi, imp, None) {
                             if imp.reexport {
                                 c.reexports.push((None, Target::Module(String::new(), f.clone())));
                             }
@@ -589,15 +275,15 @@ impl<'a> Resolver<'a> {
                         continue;
                     }
                     if imp.names.is_empty() {
-                        let t = self.import_target(fi, lang, imp, None);
-                        let local = match (&imp.alias, lang) {
-                            (Some(a), _) => a.clone(),
-                            (None, Lang::Python) => imp.module.split('.').next().unwrap_or("").to_string(),
-                            (None, _) => continue,
+                        let t = self.import_target(fi, imp, None);
+                        let local = match &imp.alias {
+                            Some(a) => a.clone(),
+                            None if rules.import_binds_root => imp.module.split('.').next().unwrap_or("").to_string(),
+                            None => continue,
                         };
                         // `import a.b` binds `a`; resolve the head module so `a.b.f()` walks down.
-                        let t = if imp.alias.is_none() && lang == Lang::Python {
-                            self.py_module(&local).map(|f| Target::Module(local.clone(), f)).unwrap_or(t)
+                        let t = if imp.alias.is_none() && rules.import_binds_root {
+                            self.modules(fi).module(&self.files, fi, &local).map(|f| Target::Module(local.clone(), f)).unwrap_or(t)
                         } else {
                             t
                         };
@@ -608,7 +294,7 @@ impl<'a> Resolver<'a> {
                         continue;
                     }
                     for n in &imp.names {
-                        let t = self.import_target(fi, lang, imp, Some(&n.name));
+                        let t = self.import_target(fi, imp, Some(&n.name));
                         let local = n.alias.clone().unwrap_or_else(|| n.name.clone());
                         if imp.reexport {
                             c.reexports.push((Some(local.clone()), t.clone()));
@@ -692,7 +378,7 @@ impl<'a> Resolver<'a> {
         let mut out = Vec::with_capacity(types.len());
         for t in types {
             let d = &self.defs[t as usize];
-            let target = (d.kind == DefKind::Type && self.files[d.file as usize].lang == Lang::Cpp)
+            let target = (d.kind == DefKind::Type && self.rules(d.file).follow_type_aliases)
                 .then(|| self.inputs[d.file as usize].facts.defs[(t - self.files[d.file as usize].first_def) as usize].ret.clone())
                 .flatten();
             match target {
@@ -759,9 +445,8 @@ impl<'a> Resolver<'a> {
             let tname = &self.defs[t as usize].name;
             if let Some(m) = self.methods.get(&(tname.clone(), name.to_string())) {
                 let tfile = self.defs[t as usize].file;
-                let lang = self.files[tfile as usize].lang;
                 // Methods attach by owner *name*; for languages with in-class methods keep the same file.
-                let filtered: Vec<u32> = if matches!(lang, Lang::Python) || lang.is_js_family() {
+                let filtered: Vec<u32> = if self.rules(tfile).methods_in_class_file {
                     m.iter().copied().filter(|d| self.defs[*d as usize].file == tfile).collect()
                 } else {
                     m.clone()
@@ -787,10 +472,7 @@ impl<'a> Resolver<'a> {
             if let Some(h) = self.ctx[file as usize].bindings.get(&(s, name.to_string())) {
                 return Some(h.clone());
             }
-            match s {
-                Some(d) => s = facts.defs[d as usize].parent,
-                None => return None,
-            }
+            s = facts.defs[s? as usize].parent;
         }
     }
 
@@ -805,7 +487,7 @@ impl<'a> Resolver<'a> {
                 None => vec![],
             },
             TypeHint::CallResult { name, qualifier } => {
-                let (targets, _) = self.resolve_call(file, scope, owner, name, qualifier.as_deref(), 0, depth - 1);
+                let (targets, _) = self.resolve_call(file, scope, owner, &Callee { name, qualifier: qualifier.as_deref(), line: 0 }, depth - 1);
                 let mut out = vec![];
                 for t in targets {
                     let d = &self.defs[t as usize];
@@ -890,17 +572,18 @@ impl<'a> Resolver<'a> {
     }
 
     fn resolve_qualifier(&self, file: u32, scope: Option<u32>, owner: Option<&str>, q: &str, depth: u8) -> Thing {
-        let lang = self.files[file as usize].lang;
+        let rules = self.rules(file);
+        let modules = self.modules(file);
         let segs = qual_segments(q);
         let Some(head) = segs.first() else { return Thing::Unknown };
-        if lang == Lang::Rust && matches!(*head, "crate" | "super") || (*head == "self" && q.contains("::")) {
+        if modules.is_module_path(q) {
             // A path into the module tree: longest prefix that is a module, then a type.
             let path = q.to_string();
-            if let Some(f) = self.rust_module(file, &path) {
+            if let Some(f) = modules.module(&self.files, file, &path) {
                 return Thing::Module(path, f);
             }
             if let Some((m, last)) = path.rsplit_once("::") {
-                if let Some(f) = self.rust_module(file, m) {
+                if let Some(f) = modules.module(&self.files, file, m) {
                     let t: Vec<u32> = self.exported(&f, last, 2).into_iter().filter(|d| self.defs[*d as usize].kind.is_type()).collect();
                     return if t.is_empty() { Thing::Unknown } else { Thing::Types(t) };
                 }
@@ -908,11 +591,7 @@ impl<'a> Resolver<'a> {
             return Thing::Unknown;
         }
         let mut thing = match *head {
-            "self" | "this" | "Self" => match owner {
-                Some(o) => Thing::Types(self.owner_types(file, o)),
-                None => Thing::Unknown,
-            },
-            "ThisClass" if lang == Lang::Cpp => match owner {
+            h if matches!(h, "self" | "this" | "Self") || rules.self_names.contains(&h) => match owner {
                 Some(o) => Thing::Types(self.owner_types(file, o)),
                 None => Thing::Unknown,
             },
@@ -925,13 +604,13 @@ impl<'a> Resolver<'a> {
                 None => Thing::Unknown,
             },
             h if h.ends_with("()") => {
-                let (targets, _) = self.resolve_call(file, scope, owner, &h[..h.len() - 2], None, 0, depth.saturating_sub(1));
+                let (targets, _) = self.resolve_call(file, scope, owner, &Callee { name: &h[..h.len() - 2], qualifier: None, line: 0 }, depth.saturating_sub(1));
                 self.returns_of(targets)
             }
             h => {
                 let member = || -> Vec<u32> {
                     match owner {
-                        Some(o) if lang == Lang::Cpp => self.member_types(file, o, h, depth),
+                        Some(o) if rules.implicit_this => self.member_types(file, o, h, depth),
                         _ => vec![],
                     }
                 };
@@ -957,7 +636,7 @@ impl<'a> Resolver<'a> {
                         }
                         Target::External => Thing::External,
                     }
-                } else if lang.is_js_family() && JS_GLOBALS.contains(&h) {
+                } else if rules.globals.contains(&h) {
                     Thing::External
                 } else {
                     let ts = self.types_named(file, h);
@@ -989,7 +668,7 @@ impl<'a> Resolver<'a> {
                 }
                 Thing::Module(key, files) => {
                     let sub = format!("{key}.{seg}");
-                    if let Some(f) = (lang == Lang::Python).then(|| self.py_module(&sub)).flatten() {
+                    if let Some(f) = modules.submodule(&key, seg) {
                         Thing::Module(sub, f)
                     } else {
                         let ts: Vec<u32> = self.exported(&files, seg, 4).into_iter().filter(|d| self.defs[*d as usize].kind.is_type()).collect();
@@ -1017,15 +696,16 @@ impl<'a> Resolver<'a> {
     }
 
     /// Returns (targets, exact?) for a call/new of `name` with optional receiver `qualifier`.
-    /// `at` is the line of the call; 0 when unknown (then only parameters shadow).
-    fn resolve_call(&self, file: u32, scope: Option<u32>, owner: Option<&str>, name: &str, qualifier: Option<&str>, at: u32, depth: u8) -> (Vec<u32>, Option<Conf>) {
+    /// Returns (targets, exact?) for a call/new of `callee` made in `scope`.
+    fn resolve_call(&self, file: u32, scope: Option<u32>, owner: Option<&str>, callee: &Callee, depth: u8) -> (Vec<u32>, Option<Conf>) {
         if depth == 0 {
             return (vec![], None);
         }
-        let lang = self.files[file as usize].lang;
+        let Callee { name, qualifier, line: at } = *callee;
+        let rules = self.rules(file);
         match qualifier {
             None => {
-                if lang == Lang::Cpp {
+                if rules.implicit_this {
                     if let Some(o) = owner {
                         let m = self.methods_of(&self.owner_types(file, o), name);
                         if !m.is_empty() {
@@ -1061,7 +741,7 @@ impl<'a> Resolver<'a> {
                         return (d, Some(Conf::Exact));
                     }
                 }
-                if lang == Lang::Go {
+                if rules.package_scope {
                     let dir = dir_of(&self.files[file as usize].path);
                     if let Some(fs) = self.dirs.get(dir) {
                         let d: Vec<u32> = fs.iter().flat_map(|f| self.exported(&[*f], name, 0)).collect();
@@ -1093,10 +773,10 @@ impl<'a> Resolver<'a> {
                     _ => {
                         // Unknown receiver: only link when exactly one method has this name,
                         // and the name isn't one that built-in containers/streams also have.
-                        if COMMON_METHODS.contains(&name) {
+                        if rules.is_builtin_method(name) {
                             return (vec![], None);
                         }
-                        if lang == Lang::Cpp && q.contains("::") || lang == Lang::Cpp && !q.contains('.') && q != "?" {
+                        if rules.static_scope_calls && (q.contains("::") || !q.contains('.') && q != "?") {
                             // `Namespace::Func()` / `Helpers::Clamp()`: a free function or static member.
                             let all: Vec<u32> = self.prefer_definitions(self.by_name.get(name).cloned().unwrap_or_default());
                             let tail = q.rsplit("::").next().unwrap_or(q);
@@ -1129,12 +809,7 @@ impl<'a> Resolver<'a> {
                 out.push(t);
                 continue;
             }
-            let ue_impl = d.attrs.iter().any(|a| crate::unreal::IMPLEMENTATION_SPECIFIERS.contains(&a.as_str()));
-            let (name, qual) = if ue_impl {
-                (format!("{}_Implementation", d.name), format!("{}_Implementation", d.qual))
-            } else {
-                (d.name.clone(), d.qual.clone())
-            };
+            let (name, qual) = lang::support(self.files[d.file as usize].lang).definition_key(d);
             let defs: Vec<u32> = self
                 .by_name
                 .get(&name)
@@ -1195,7 +870,7 @@ impl<'a> Resolver<'a> {
         let mut seen: HashSet<(Option<u32>, u32)> = HashSet::new();
         for r in facts.refs.iter().filter(|r| r.kind != RefKind::Inherit) {
             stats.refs += 1;
-            let (targets, conf) = self.resolve_call(fi, r.scope, r.owner.as_deref(), &r.name, r.qualifier.as_deref(), r.line, 6);
+            let (targets, conf) = self.resolve_call(fi, r.scope, r.owner.as_deref(), &Callee { name: &r.name, qualifier: r.qualifier.as_deref(), line: r.line }, 6);
             let Some(conf) = conf else {
                 let known = self.by_name.contains_key(&r.name);
                 if known { stats.ambiguous += 1 } else { stats.unresolved += 1 }
@@ -1206,7 +881,7 @@ impl<'a> Resolver<'a> {
                 Conf::Inferred => stats.inferred += 1,
             }
             let from_def = r.scope.map(|s| self.global_def(fi, s));
-            let targets = if facts.lang == Lang::Cpp { self.prefer_definitions(targets) } else { targets };
+            let targets = if self.rules(fi).link_declarations { self.prefer_definitions(targets) } else { targets };
             for t in self.one_per_overload_set(targets) {
                 if Some(t) == from_def && r.kind == RefKind::New {
                     continue;

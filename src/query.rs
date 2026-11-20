@@ -129,7 +129,7 @@ pub fn resolve_symbol(g: &Graph, sym: &str) -> Vec<u32> {
     // Unreal: calls to an RPC/BlueprintNativeEvent land on `<Name>_Implementation`.
     let extra: Vec<u32> = found
         .iter()
-        .filter(|d| g.defs[**d as usize].attrs.iter().any(|a| crate::unreal::IMPLEMENTATION_SPECIFIERS.contains(&a.as_str())))
+        .filter(|d| g.defs[**d as usize].attrs.iter().any(|a| crate::lang::cpp::unreal::IMPLEMENTATION_SPECIFIERS.contains(&a.as_str())))
         .flat_map(|d| {
             let q = format!("{}_Implementation", g.defs[*d as usize].qual);
             (0..g.defs.len() as u32).filter(move |x| g.defs[*x as usize].qual == q)

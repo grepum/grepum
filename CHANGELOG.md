@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+- **Each language is a module behind one interface** (`src/lang/`): its
+  syntax handling, its module resolution (imports, includes, packages) and
+  its resolution rules as data. The extractor and resolver no longer branch
+  on the language. Output is unchanged on the benchmark repos, except:
+- **Go has its own list of standard-library method names**, so calls like
+  `cmd.Wait()` or `ticker.Stop()` on an unknown receiver are no longer
+  guessed to be a project method (11 wrong links fewer on fzf).
+- Output order is deterministic (inherit edges and imports were in hash order).
+
 ## 0.3.0
 
 TypeScript, scored against the TypeScript compiler on two real repos

@@ -18,35 +18,9 @@ pub enum Lang {
 }
 
 impl Lang {
+    /// The language of a source file, by extension (see `lang::of_path`).
     pub fn from_path(path: &str) -> Option<Lang> {
-        let ext = path.rsplit_once('.')?.1;
-        Some(match ext {
-            "py" | "pyi" => Lang::Python,
-            "ts" | "mts" | "cts" => Lang::TypeScript,
-            "tsx" => Lang::Tsx,
-            "js" | "jsx" | "mjs" | "cjs" => Lang::JavaScript,
-            "rs" => Lang::Rust,
-            "go" => Lang::Go,
-            // C is parsed with the C++ grammar: it accepts nearly all C and keeps one resolver.
-            "cpp" | "cc" | "cxx" | "c++" | "hpp" | "hh" | "hxx" | "h" | "inl" | "ipp" | "tpp" | "c" => Lang::Cpp,
-            _ => return None,
-        })
-    }
-
-    pub fn grammar(self) -> tree_sitter::Language {
-        match self {
-            Lang::Python => tree_sitter_python::LANGUAGE.into(),
-            Lang::TypeScript => tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
-            Lang::Tsx => tree_sitter_typescript::LANGUAGE_TSX.into(),
-            Lang::JavaScript => tree_sitter_javascript::LANGUAGE.into(),
-            Lang::Rust => tree_sitter_rust::LANGUAGE.into(),
-            Lang::Go => tree_sitter_go::LANGUAGE.into(),
-            Lang::Cpp => tree_sitter_cpp::LANGUAGE.into(),
-        }
-    }
-
-    pub fn is_js_family(self) -> bool {
-        matches!(self, Lang::TypeScript | Lang::Tsx | Lang::JavaScript)
+        crate::lang::of_path(path)
     }
 }
 

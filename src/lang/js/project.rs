@@ -3,6 +3,7 @@
 //! in a `package.json`. Built from the config files of the snapshot, so it is
 //! as cacheable as the source files themselves.
 
+use crate::lang::{dir_of, normalize_path as normalize};
 use serde_json::Value;
 use std::collections::HashMap;
 
@@ -193,26 +194,8 @@ fn collect_strings<'v>(v: &'v Value, out: &mut Vec<&'v str>) {
     }
 }
 
-fn dir_of(path: &str) -> &str {
-    path.rsplit_once('/').map(|(d, _)| d).unwrap_or("")
-}
-
 fn join(dir: &str, rel: &str) -> String {
     if dir.is_empty() { rel.to_string() } else { format!("{dir}/{rel}") }
-}
-
-fn normalize(path: &str) -> String {
-    let mut out: Vec<&str> = vec![];
-    for seg in path.split('/') {
-        match seg {
-            "" | "." => {}
-            ".." => {
-                out.pop();
-            }
-            s => out.push(s),
-        }
-    }
-    out.join("/")
 }
 
 /// tsconfig files are JSON with comments and trailing commas.

@@ -9,7 +9,7 @@ use crate::extract::extract;
 use crate::facts::{FileFacts, Lang};
 use crate::git::{Change, Repo};
 use crate::graph::{self, Graph, Input};
-use crate::js_project::{self, JsProject};
+use crate::lang;
 use crate::store::{self, Store};
 use anyhow::Result;
 use rayon::prelude::*;
@@ -42,18 +42,18 @@ struct Overlay {
     graph: Graph,
 }
 
-/// Files that take part in a graph: sources, and the project config that
-/// changes how their imports resolve.
+/// Files that take part in a graph: sources, and the project files that
+/// change how their imports resolve.
 fn relevant(path: &str) -> bool {
-    Lang::from_path(path).is_some() || js_project::is_config(path)
+    Lang::from_path(path).is_some() || lang::is_project_file(path)
 }
 
 /// Build a graph from a tree's (path, oid) entries. Blob contents come from
 /// the cache, then `inline` (worktree files), then the object database.
 fn build(repo: &Repo, store: &Store, all: Vec<(String, String)>, inline: &HashMap<String, Vec<u8>>, report: &mut Report) -> Result<Graph> {
-    let configs: Vec<(String, String)> = all.iter().filter(|(p, _)| js_project::is_config(p)).cloned().collect();
+    let project_files: Vec<(String, String)> = all.iter().filter(|(p, _)| lang::is_project_file(p)).cloned().collect();
     let entries: Vec<(String, String, Lang)> = all.into_iter().filter_map(|(p, o)| Lang::from_path(&p).map(|l| (p, o, l))).collect();
-    let js = load_js_project(repo, &configs, inline)?;
+    let project = read_project_files(repo, &project_files, inline)?;
     let cached: Vec<Option<FileFacts>> = entries.par_iter().map(|(_, oid, lang)| store.load_facts(oid, *lang)).collect();
     let missing: Vec<String> = entries
         .iter()
@@ -89,17 +89,16 @@ fn build(repo: &Repo, store: &Store, all: Vec<(String, String)>, inline: &HashMa
     report.facts_extracted = extracted.into_inner();
     report.facts_cached = inputs.len() - report.facts_extracted;
     report.files = inputs.len();
-    Ok(graph::build(inputs, js))
+    Ok(graph::build(inputs, &project))
 }
 
-fn load_js_project(repo: &Repo, configs: &[(String, String)], inline: &HashMap<String, Vec<u8>>) -> Result<JsProject> {
-    let missing: Vec<String> = configs.iter().filter(|(_, o)| !inline.contains_key(o)).map(|(_, o)| o.clone()).collect();
+fn read_project_files(repo: &Repo, files: &[(String, String)], inline: &HashMap<String, Vec<u8>>) -> Result<Vec<(String, Vec<u8>)>> {
+    let missing: Vec<String> = files.iter().filter(|(_, o)| !inline.contains_key(o)).map(|(_, o)| o.clone()).collect();
     let blobs = repo.read_blobs(&missing)?;
-    let files: Vec<(String, Vec<u8>)> = configs
+    Ok(files
         .iter()
         .filter_map(|(p, o)| inline.get(o).or_else(|| blobs.get(o)).map(|b| (p.clone(), b.clone())))
-        .collect();
-    Ok(JsProject::parse(&files))
+        .collect())
 }
 
 pub fn for_rev(repo: &Repo, store: &Store, rev: &str, rebuild: bool) -> Result<Snapshot> {
@@ -197,7 +196,7 @@ pub fn for_worktree(repo: &Repo, store: &Store, rebuild: bool) -> Result<Snapsho
     for (p, o) in present.iter().zip(&oids) {
         let needed = match Lang::from_path(p) {
             Some(lang) => store.load_facts(o, lang).is_none(),
-            None => true, // config files aren't cached as facts
+            None => true, // project files aren't cached as facts
         };
         if needed {
             if let Ok(bytes) = std::fs::read(repo.toplevel.join(p)) {
