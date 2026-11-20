@@ -3,7 +3,7 @@
 //! and `self.x = ...` attribute types.
 
 use super::{dir_of, strip_ext, Language, Modules, Rules, Target};
-use crate::extract::{children, line, Walker};
+use crate::extract::{children, line, RefSite, Reference, Walker};
 use crate::facts::*;
 use crate::graph::GFile;
 use std::collections::HashMap;
@@ -41,6 +41,10 @@ impl Language for Python {
 
     fn rules(&self) -> &'static Rules {
         &RULES
+    }
+
+    fn references(&self, w: &Walker, site: &RefSite, out: &mut Vec<Reference>) -> bool {
+        references(w, site, out)
     }
 
     fn modules(&self, files: &[GFile], _: &[(String, Vec<u8>)]) -> Box<dyn Modules> {
@@ -187,22 +191,26 @@ fn visit(w: &mut Walker, n: Node) -> bool {
                 let hint = f("type")
                     .and_then(|t| w.type_name(t).map(TypeHint::Named))
                     .or_else(|| f("right").and_then(|r| w.value_hint(r)));
-                if let Some(hint) = hint {
-                    match left.kind() {
-                        "identifier" => {
+                match left.kind() {
+                    "identifier" => {
+                        if let Some(hint) = hint {
                             let s = w.binding_scope();
                             w.add_binding(s, w.text(left), hint);
                         }
-                        "attribute" => {
-                            let obj = left.child_by_field_name("object").map(|o| w.text(o));
-                            let attr = left.child_by_field_name("attribute").map(|a| w.text(a));
-                            if let (Some("self"), Some(attr), Some(owner)) = (obj, attr, w.owners.last().cloned()) {
-                                let hint = w.resolve_alias_now(hint);
-                                w.add_binding(BindingScope::Owner(owner), attr, hint);
-                            }
+                        // `x = 0` / `x: int` in a class body: a class attribute.
+                        if let Some(class) = w.enclosing_type_def().map(|d| d.name.clone()) {
+                            w.add_field(&class, w.text(left), n, None);
                         }
-                        _ => {}
                     }
+                    "attribute" => {
+                        let obj = left.child_by_field_name("object").map(|o| w.text(o));
+                        let attr = left.child_by_field_name("attribute").map(|a| w.text(a));
+                        if let (Some("self"), Some(attr), Some(owner)) = (obj, attr, w.owners.last().cloned()) {
+                            let hint = hint.map(|h| w.resolve_alias_now(h));
+                            w.add_field(&owner, attr, n, hint);
+                        }
+                    }
+                    _ => {}
                 }
             }
             w.visit_opt(f("right"));
@@ -251,5 +259,45 @@ fn visit(w: &mut Walker, n: Node) -> bool {
             true
         }
         _ => false,
+    }
+}
+
+fn references(w: &Walker, site: &RefSite, out: &mut Vec<Reference>) -> bool {
+    let n = site.node;
+    match n.kind() {
+        "import_statement" | "import_from_statement" | "future_import_statement" => false,
+        // Annotations: `Repo`, `db.Pool`, `list[Repo] | None`, and forward references `"Repo"`.
+        "type" => {
+            annotation(w, n, out);
+            false
+        }
+        "attribute" => {
+            if !site.is_callee() {
+                out.extend(w.member_ref(n));
+            }
+            true
+        }
+        _ => true,
+    }
+}
+
+fn annotation(w: &Walker, n: Node, out: &mut Vec<Reference>) {
+    match n.kind() {
+        "identifier" | "attribute" => out.extend(w.type_ref(n)),
+        "string" => {
+            let text = w.text(n).trim_matches(|c| c == '"' || c == '\'');
+            if !text.is_empty() && text.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '.') {
+                let (qualifier, name) = match text.rsplit_once('.') {
+                    Some((q, nm)) => (Some(q.to_string()), nm),
+                    None => (None, text),
+                };
+                out.push(Reference { kind: RefKind::Type, name: name.to_string(), qualifier, line: line(n) });
+            }
+        }
+        _ => {
+            for c in children(n) {
+                annotation(w, c, out);
+            }
+        }
     }
 }

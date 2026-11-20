@@ -1,5 +1,6 @@
 //! Read-side operations over a resolved graph.
 
+use crate::facts::DefKind;
 use crate::graph::{Conf, EdgeKind, Graph};
 use serde_json::{json, Value};
 use std::collections::{BTreeSet, HashMap, HashSet};
@@ -59,8 +60,9 @@ pub fn find(g: &Graph, idx: &Index, query: &str, limit: usize) -> Vec<(f64, u32)
     if qtokens.is_empty() {
         return vec![];
     }
-    let def_tokens: Vec<Vec<String>> = g.defs.iter().map(|d| words(&d.qual)).collect();
-    let n = g.defs.len().max(1) as f64;
+    // Fields are reached through their type (`outline`, `refs`), not searched.
+    let def_tokens: Vec<Vec<String>> = g.defs.iter().map(|d| if d.kind == DefKind::Field { vec![] } else { words(&d.qual) }).collect();
+    let n = g.defs.iter().filter(|d| d.kind != DefKind::Field).count().max(1) as f64;
     let idf: Vec<f64> = qtokens
         .iter()
         .map(|t| {
@@ -99,7 +101,7 @@ pub fn find(g: &Graph, idx: &Index, query: &str, limit: usize) -> Vec<(f64, u32)
             } else if d.name.to_lowercase() == q {
                 s += 50.0;
             }
-            let indeg = idx.incoming.get(&(i as u32)).map(|v| v.len()).unwrap_or(0) as f64;
+            let indeg = idx.incoming.get(&(i as u32)).map(|v| v.iter().filter(|e| g.edges[**e].kind != EdgeKind::Ref).count()).unwrap_or(0) as f64;
             s += 0.15 * (1.0 + indeg).ln();
             Some((s, i as u32))
         })
@@ -141,7 +143,14 @@ pub fn resolve_symbol(g: &Graph, sym: &str) -> Vec<u32> {
     found
 }
 
+/// Fields only when nothing else matches: `show load` means the function, not a `load` field.
 fn resolve_symbol_inner(g: &Graph, sym: &str) -> Vec<u32> {
+    let found = resolve_symbol_any(g, sym);
+    let not_fields: Vec<u32> = found.iter().copied().filter(|d| g.defs[*d as usize].kind != DefKind::Field).collect();
+    if not_fields.is_empty() { found } else { not_fields }
+}
+
+fn resolve_symbol_any(g: &Graph, sym: &str) -> Vec<u32> {
     let sym = sym.replace("::", ".");
     let sym = sym.as_str();
     let (file_filter, name) = match sym.rsplit_once(':') {

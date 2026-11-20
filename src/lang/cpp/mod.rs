@@ -6,7 +6,7 @@
 pub mod unreal;
 
 use super::{dir_of, normalize_path, Language, Modules, Preprocessed, Rules, Target};
-use crate::extract::{children, line, Walker};
+use crate::extract::{children, line, RefSite, Reference, Walker};
 use crate::facts::*;
 use crate::graph::{GDef, GFile};
 use std::collections::HashMap;
@@ -25,6 +25,7 @@ static RULES: Rules = Rules {
     static_scope_calls: true,
     follow_type_aliases: true,
     link_declarations: true,
+    global_type_names: true,
     ..Rules::DEFAULT
 };
 
@@ -106,6 +107,10 @@ impl Language for Cpp {
 
     fn rules(&self) -> &'static Rules {
         &RULES
+    }
+
+    fn references(&self, w: &Walker, site: &RefSite, out: &mut Vec<Reference>) -> bool {
+        references(w, site, out)
     }
 
     fn modules(&self, files: &[GFile], _: &[(String, Vec<u8>)]) -> Box<dyn Modules> {
@@ -309,20 +314,18 @@ fn visit(w: &mut Walker, n: Node) -> bool {
                 }
                 let value = value.or(default_value);
                 let hint = ty.clone().map(TypeHint::Named).or_else(|| value.and_then(|v| w.value_hint(v)));
-                if let Some(h) = hint {
-                    let name = w.text(name_node).to_string();
-                    if in_class {
-                        if let Some(owner) = w.owners.last().cloned() {
-                            w.add_binding(BindingScope::Owner(owner), &name, h);
-                        }
-                    } else {
-                        let s = w.binding_scope();
-                        w.add_binding(s, &name, h);
+                let name = w.text(name_node).to_string();
+                if in_class {
+                    if let Some(owner) = w.owners.last().cloned() {
+                        w.add_field(&owner, &name, n, hint);
                     }
+                } else if let Some(h) = hint {
+                    let s = w.binding_scope();
+                    w.add_binding(s, &name, h);
                 }
                 w.visit_opt(value);
             }
-            // Unreal reflection attributes on properties aren't defs; don't let them leak to the next def.
+            // Attributes on a declaration that isn't a field or prototype mustn't leak to the next def.
             w.discard_attrs(n);
             // Anonymous struct/class bodies inside a declaration still define things.
             if let Some(t) = ty_node.filter(|t| t.child_by_field_name("body").is_some()) {
@@ -377,4 +380,82 @@ fn visit(w: &mut Walker, n: Node) -> bool {
         }
         _ => false,
     }
+}
+
+/// Whether the node is the name a declaration introduces (`x` in `int x = 1;`,
+/// a parameter, `AHero::Attack` in its definition), as opposed to a value in it.
+fn is_declared_name(site: &RefSite) -> bool {
+    site.parent().is_some_and(|p| p.child_by_field_name("declarator").is_some_and(|c| c.id() == site.node.id()))
+}
+
+/// Kinds whose `name` is the type being defined (or declared), not a use of it.
+const TYPE_DEFINITIONS: &[&str] =
+    &["class_specifier", "struct_specifier", "union_specifier", "enum_specifier", "alias_declaration", "concept_definition"];
+
+fn references(w: &Walker, site: &RefSite, out: &mut Vec<Reference>) -> bool {
+    let n = site.node;
+    let parent = site.parent_kind();
+    let in_method = site.in_method;
+    match n.kind() {
+        "preproc_include" | "using_declaration" | "namespace_alias_definition" => return false,
+        "type_identifier" => {
+            let in_qualified = parent == "qualified_identifier"
+                || parent == "template_type" && site.grandparent().is_some_and(|g| g.kind() == "qualified_identifier");
+            let defined = site.is_field_of("name", TYPE_DEFINITIONS)
+                || site.is_field_of("declarator", &["type_definition"])
+                || parent.ends_with("type_parameter_declaration");
+            if !in_qualified && !defined && !site.is_type_parameter(w.text(n)) {
+                out.extend(w.type_ref(n));
+            }
+        }
+        // `ns::Pool`, `Status::OK()`, `EKind::Fast`: a type, or the type a static member belongs to.
+        "qualified_identifier" => {
+            // The name in `void AHero::Attack()` is the definition, not a use.
+            if is_declared_name(site) {
+                return false;
+            }
+            if parent == "qualified_identifier" {
+                return true;
+            }
+            let mut inner = n;
+            while let Some(nm) = inner.child_by_field_name("name").filter(|_| inner.kind() == "qualified_identifier") {
+                inner = nm;
+            }
+            let (name, qualifier) = w.split_callee(n);
+            if matches!(inner.kind(), "type_identifier" | "template_type") {
+                if let Some(name) = name {
+                    out.push(Reference { kind: RefKind::Type, name, qualifier, line: line(n) });
+                }
+            } else if let Some(q) = qualifier {
+                let (rest, last) = match q.rsplit_once("::") {
+                    Some((r, l)) => (Some(r.to_string()), l),
+                    None => (None, q.as_str()),
+                };
+                if last.starts_with(char::is_uppercase) {
+                    out.push(Reference { kind: RefKind::Type, name: last.to_string(), qualifier: rest, line: line(n) });
+                }
+            }
+        }
+        "field_expression" => {
+            if !site.is_callee() {
+                out.extend(w.member_ref(n));
+            }
+        }
+        // `: env_(options.env)` in a constructor sets a member.
+        "field_initializer" if in_method => {
+            if let Some(f) = n.named_child(0).filter(|f| f.kind() == "field_identifier") {
+                out.push(Reference { kind: RefKind::Field, name: w.text(f).to_string(), qualifier: None, line: line(f) });
+            }
+        }
+        // A bare name in a method may be a member (implicit `this->`); the resolver
+        // keeps it only when it isn't a local and the class has such a field.
+        "identifier" if in_method => {
+            let declares = is_declared_name(site) || parent == "structured_binding_declarator" || parent.starts_with("preproc");
+            if !declares && !site.is_callee() && !matches!(parent, "qualified_identifier" | "labeled_statement" | "goto_statement") {
+                out.push(Reference { kind: RefKind::Field, name: w.text(n).to_string(), qualifier: None, line: line(n) });
+            }
+        }
+        _ => {}
+    }
+    true
 }

@@ -2,7 +2,7 @@
 //! structs, enums, traits, `use` trees and `crate::`/`super::` module paths.
 
 use super::{strip_ext, Language, Modules, Rules, Target};
-use crate::extract::{children, line, Walker};
+use crate::extract::{children, line, RefSite, Reference, Walker};
 use crate::facts::*;
 use crate::graph::GFile;
 use std::collections::HashMap;
@@ -38,6 +38,10 @@ impl Language for Rust {
 
     fn rules(&self) -> &'static Rules {
         &RULES
+    }
+
+    fn references(&self, w: &Walker, site: &RefSite, out: &mut Vec<Reference>) -> bool {
+        references(w, site, out)
     }
 
     fn modules(&self, files: &[GFile], _: &[(String, Vec<u8>)]) -> Box<dyn Modules> {
@@ -207,8 +211,8 @@ fn visit(w: &mut Walker, n: Node) -> bool {
                 for fd in children(body).into_iter().filter(|c| c.kind() == "field_declaration") {
                     let fname = fd.child_by_field_name("name").map(|x| w.text(x));
                     let fty = fd.child_by_field_name("type").and_then(|t| w.type_name(t));
-                    if let (Some(fname), Some(fty)) = (fname, fty) {
-                        w.add_binding(BindingScope::Owner(name.to_string()), fname, TypeHint::Named(fty));
+                    if let Some(fname) = fname {
+                        w.add_field(name, fname, fd, fty.map(TypeHint::Named));
                     }
                 }
             }
@@ -273,4 +277,60 @@ fn visit(w: &mut Walker, n: Node) -> bool {
         "macro_invocation" => true,
         _ => false,
     }
+}
+
+/// Kinds whose `name` is the type being defined, not a use of it.
+const TYPE_DEFINITIONS: &[&str] = &["struct_item", "enum_item", "union_item", "type_item", "trait_item", "associated_type"];
+
+fn references(w: &Walker, site: &RefSite, out: &mut Vec<Reference>) -> bool {
+    let n = site.node;
+    let f = |name: &str| n.child_by_field_name(name);
+    match n.kind() {
+        // Imports are recorded as imports; attributes name derives and lints.
+        "use_declaration" | "attribute_item" | "inner_attribute_item" | "macro_definition" => return false,
+        "type_identifier" => {
+            let generic_param = matches!(site.parent_kind(), "type_parameters" | "constrained_type_parameter" | "type_parameter");
+            if !site.is_field_of("name", TYPE_DEFINITIONS) && !generic_param && !site.is_type_parameter(w.text(n)) {
+                out.extend(w.type_ref(n));
+            }
+        }
+        "scoped_type_identifier" => {
+            out.extend(w.type_ref(n));
+            return false;
+        }
+        // `DefKind::Function`, `Repo::new()`: the path names a type.
+        "scoped_identifier" => {
+            if let Some(path) = f("path") {
+                let (name, qualifier) = w.split_callee(path);
+                if let Some(name) = name.filter(|s| s.starts_with(char::is_uppercase) && s != "Self") {
+                    out.push(Reference { kind: RefKind::Type, name, qualifier, line: line(n) });
+                }
+            }
+            return false;
+        }
+        "field_expression" => {
+            if !site.is_callee() && f("field").is_some_and(|x| x.kind() == "field_identifier") {
+                out.extend(w.member_ref(n));
+            }
+        }
+        // `Binding { line, scope: s }` and the pattern `Binding { line, .. }`.
+        "struct_expression" | "struct_pattern" => {
+            let ty = f("name").or(f("type")).map(|t| w.text(t).split('<').next().unwrap_or("").trim().to_string());
+            let body = if n.kind() == "struct_expression" { f("body") } else { Some(n) };
+            if let (Some(ty), Some(body)) = (ty, body) {
+                for c in children(body) {
+                    let field = match c.kind() {
+                        "field_initializer" | "field_pattern" => c.child_by_field_name("field").or(c.child_by_field_name("name")),
+                        "shorthand_field_initializer" => c.named_child(0),
+                        _ => None,
+                    };
+                    if let Some(field) = field.filter(|x| matches!(x.kind(), "field_identifier" | "identifier" | "shorthand_field_identifier")) {
+                        out.push(Reference { kind: RefKind::Field, name: w.text(field).to_string(), qualifier: Some(ty.clone()), line: line(field) });
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+    true
 }

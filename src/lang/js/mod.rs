@@ -5,7 +5,7 @@
 mod project;
 
 use super::{dir_of, normalize_path, strip_ext, Language, Modules, Rules, Target};
-use crate::extract::{children, line, Walker};
+use crate::extract::{children, line, RefSite, Reference, Walker};
 use crate::facts::*;
 use crate::graph::GFile;
 use project::JsProject;
@@ -72,6 +72,10 @@ impl Language for Js {
 
     fn rules(&self) -> &'static Rules {
         &RULES
+    }
+
+    fn references(&self, w: &Walker, site: &RefSite, out: &mut Vec<Reference>) -> bool {
+        references(w, site, out)
     }
 
     fn is_project_file(&self, path: &str) -> bool {
@@ -150,18 +154,16 @@ fn params(w: &mut Walker, func: Node, idx: u32, is_ctor: bool) {
         let Some(pat) = pat else { continue };
         let ty = p.child_by_field_name("type").and_then(|t| w.type_name(t));
         let ty = ty.map(|t| generics.get(&t).cloned().unwrap_or(t));
+        // `constructor(private repo: Repo)` also declares a field.
+        let is_property = children(p).iter().any(|c| c.kind() == "accessibility_modifier" || w.text(*c) == "readonly");
+        if let (true, true, "identifier", Some(owner)) = (is_ctor, is_property, pat.kind(), w.owners.last().cloned()) {
+            w.add_field(&owner, w.text(pat), p, ty.clone().map(TypeHint::Named));
+        }
         let (Some(ty), "identifier") = (ty, pat.kind()) else {
             pattern_names(w, pat, BindingScope::Def(idx));
             continue;
         };
-        let name = w.text(pat);
-        w.add_binding(BindingScope::Def(idx), name, TypeHint::Named(ty.clone()));
-        let is_property = children(p).iter().any(|c| c.kind() == "accessibility_modifier" || w.text(*c) == "readonly");
-        if is_ctor && is_property {
-            if let Some(owner) = w.owners.last().cloned() {
-                w.add_binding(BindingScope::Owner(owner), name, TypeHint::Named(ty));
-            }
-        }
+        w.add_binding(BindingScope::Def(idx), w.text(pat), TypeHint::Named(ty));
     }
 }
 
@@ -333,9 +335,8 @@ fn visit(w: &mut Walker, n: Node) -> bool {
         "property_signature" => {
             // `interface Ctx { req: HonoRequest }`
             if let (Some(nn), Some(o)) = (f("name"), w.owners.last().cloned()) {
-                if let Some(t) = f("type").and_then(|t| w.type_name(t)) {
-                    w.add_binding(BindingScope::Owner(o), w.text(nn), TypeHint::Named(t));
-                }
+                let t = f("type").and_then(|t| w.type_name(t));
+                w.add_field(&o, w.text(nn), n, t.map(TypeHint::Named));
             }
             true
         }
@@ -414,9 +415,7 @@ fn visit(w: &mut Walker, n: Node) -> bool {
                 let hint = f("type")
                     .and_then(|t| w.type_name(t).map(TypeHint::Named))
                     .or_else(|| value.and_then(|v| w.value_hint(v)));
-                if let Some(h) = hint {
-                    w.add_binding(BindingScope::Owner(owner), w.text(nn), h);
-                }
+                w.add_field(&owner, w.text(nn), n, hint);
             }
             w.visit_opt(value);
             true
@@ -465,10 +464,8 @@ fn visit(w: &mut Walker, n: Node) -> bool {
                     let prop = left.child_by_field_name("property");
                     if let (Some(o), Some(p), Some(owner)) = (obj, prop, w.owners.last().cloned()) {
                         if o.kind() == "this" {
-                            if let Some(h) = w.value_hint(right) {
-                                let h = w.resolve_alias_now(h);
-                                w.add_binding(BindingScope::Owner(owner), w.text(p), h);
-                            }
+                            let h = w.value_hint(right).map(|h| w.resolve_alias_now(h));
+                            w.add_field(&owner, w.text(p), n, h);
                         }
                     }
                 }
@@ -559,4 +556,38 @@ fn local_exports(w: &mut Walker, n: Node) {
     if let Some(local) = named {
         w.facts.exports.push(Export { local: w.text(local).to_string(), exported: "default".into() });
     }
+}
+
+/// Kinds whose `name` is the type being defined (or a generic parameter), not a use of it.
+const TYPE_DEFINITIONS: &[&str] =
+    &["class_declaration", "abstract_class_declaration", "class", "interface_declaration", "type_alias_declaration", "type_parameter"];
+
+fn references(w: &Walker, site: &RefSite, out: &mut Vec<Reference>) -> bool {
+    let n = site.node;
+    let f = |name: &str| n.child_by_field_name(name);
+    match n.kind() {
+        "import_statement" => return false,
+        "export_statement" if f("source").is_some() => return false,
+        "type_identifier" => {
+            if !site.is_field_of("name", TYPE_DEFINITIONS) && !site.is_type_parameter(w.text(n)) {
+                out.extend(w.type_ref(n));
+            }
+        }
+        // `ns.Repo` in a type position.
+        "nested_type_identifier" => {
+            if let (Some(m), Some(name)) = (f("module"), f("name")) {
+                out.push(Reference { kind: RefKind::Type, name: w.text(name).to_string(), qualifier: Some(w.text(m).to_string()), line: line(n) });
+            }
+            return false;
+        }
+        "member_expression" => {
+            // `<UI.Button>` is a component use, recorded as a call.
+            let jsx = site.parent_kind().starts_with("jsx_");
+            if !site.is_callee() && !jsx {
+                out.extend(w.member_ref(n));
+            }
+        }
+        _ => {}
+    }
+    true
 }

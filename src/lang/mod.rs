@@ -5,6 +5,8 @@
 //!
 //! - **syntax** ([`Language::visit`]): which tree-sitter nodes are definitions,
 //!   calls, imports and type bindings, recorded as language-neutral facts;
+//! - **references** ([`Language::references`]): type names and member
+//!   accesses, the uses `grepum refs` lists beside calls;
 //! - **modules** ([`Modules`]): which files an import names;
 //! - **rules** ([`Rules`]): the few places where resolution differs, such as
 //!   C++'s implicit `this->`, Go's package scope or JS globals.
@@ -18,7 +20,7 @@ pub mod js;
 pub mod python;
 pub mod rust;
 
-use crate::extract::Walker;
+use crate::extract::{RefSite, Reference, Walker};
 use crate::facts::{Def, Import, Lang};
 use crate::graph::GFile;
 use tree_sitter::Node;
@@ -73,6 +75,13 @@ pub trait Language: Sync {
     }
 
     fn rules(&self) -> &'static Rules;
+
+    /// Non-call references at `site.node`: type names in type positions, member
+    /// accesses that aren't calls. Return false to skip the node's subtree, for
+    /// syntax whose names aren't uses (imports) or that was handled whole.
+    fn references(&self, _w: &Walker, _site: &RefSite, _out: &mut Vec<Reference>) -> bool {
+        true
+    }
 
     fn is_project_file(&self, _path: &str) -> bool {
         false
@@ -168,6 +177,9 @@ pub struct Rules {
     pub link_declarations: bool,
     /// `import a.b` binds `a`, the root package.
     pub import_binds_root: bool,
+    /// A type name used without an import may be any project type of that name,
+    /// when unique (C++: headers reach further than the direct includes).
+    pub global_type_names: bool,
 }
 
 impl Rules {
@@ -188,6 +200,7 @@ impl Rules {
         follow_type_aliases: false,
         link_declarations: false,
         import_binds_root: false,
+        global_type_names: false,
     };
 }
 

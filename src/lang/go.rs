@@ -3,7 +3,7 @@
 //! a directory shares one scope.
 
 use super::{dir_of, Language, Modules, Rules, Target};
-use crate::extract::{children, line, Walker};
+use crate::extract::{children, line, RefSite, Reference, Walker};
 use crate::facts::*;
 use crate::graph::GFile;
 use std::collections::HashMap;
@@ -43,6 +43,10 @@ impl Language for Go {
 
     fn rules(&self) -> &'static Rules {
         &RULES
+    }
+
+    fn references(&self, w: &Walker, site: &RefSite, out: &mut Vec<Reference>) -> bool {
+        references(w, site, out)
     }
 
     fn modules(&self, files: &[GFile], _: &[(String, Vec<u8>)]) -> Box<dyn Modules> {
@@ -131,11 +135,11 @@ fn visit(w: &mut Walker, n: Node) -> bool {
             if let Some(st) = ty.filter(|t| t.kind() == "struct_type") {
                 for list in children(st).into_iter().filter(|c| c.kind() == "field_declaration_list") {
                     for fd in children(list).into_iter().filter(|c| c.kind() == "field_declaration") {
-                        let Some(fty) = fd.child_by_field_name("type").and_then(|t| w.type_name(t)) else { continue };
+                        let fty = fd.child_by_field_name("type").and_then(|t| w.type_name(t));
                         let mut c = fd.walk();
                         let names: Vec<_> = fd.children_by_field_name("name", &mut c).collect();
                         for nm in names {
-                            w.add_binding(BindingScope::Owner(name.to_string()), w.text(nm), TypeHint::Named(fty.clone()));
+                            w.add_field(name, w.text(nm), fd, fty.clone().map(TypeHint::Named));
                         }
                     }
                 }
@@ -199,4 +203,45 @@ fn visit(w: &mut Walker, n: Node) -> bool {
         }
         _ => false,
     }
+}
+
+fn references(w: &Walker, site: &RefSite, out: &mut Vec<Reference>) -> bool {
+    let n = site.node;
+    let f = |name: &str| n.child_by_field_name(name);
+    match n.kind() {
+        "import_declaration" | "package_clause" => return false,
+        // A method's receiver type is where it's declared, not a use.
+        "parameter_list" if site.is_field_of("receiver", &["method_declaration"]) => return false,
+        "type_identifier" => {
+            if !site.is_field_of("name", &["type_spec", "type_alias", "type_parameter_declaration"]) && !site.is_type_parameter(w.text(n)) {
+                out.extend(w.type_ref(n));
+            }
+        }
+        "qualified_type" => {
+            if let (Some(pkg), Some(name)) = (f("package"), f("name")) {
+                out.push(Reference { kind: RefKind::Type, name: w.text(name).to_string(), qualifier: Some(w.text(pkg).to_string()), line: line(n) });
+            }
+            return false;
+        }
+        "selector_expression" => {
+            if !site.is_callee() {
+                out.extend(w.member_ref(n));
+            }
+        }
+        // `Conn{id: 1}`: the keys are the struct's fields.
+        "composite_literal" => {
+            let ty = f("type").filter(|t| matches!(t.kind(), "type_identifier" | "qualified_type" | "generic_type"));
+            if let (Some(ty), Some(body)) = (ty, f("body")) {
+                let ty = w.text(ty).split('[').next().unwrap_or("").to_string();
+                for el in children(body).into_iter().filter(|c| c.kind() == "keyed_element") {
+                    let key = el.named_child(0).map(|k| if k.kind() == "literal_element" { k.named_child(0).unwrap_or(k) } else { k });
+                    if let Some(k) = key.filter(|k| matches!(k.kind(), "field_identifier" | "identifier")) {
+                        out.push(Reference { kind: RefKind::Field, name: w.text(k).to_string(), qualifier: Some(ty.clone()), line: line(k) });
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+    true
 }

@@ -44,6 +44,7 @@ grepum index                     # graph of this worktree (incl. uncommitted edi
 grepum find order service        # ranked symbol search
 grepum callers OrderService.get  # who calls it (--depth N for transitive)
 grepum callees run_order
+grepum refs Order.total          # every use: calls, type uses, field reads/writes, subclasses
 grepum outline src/orders.py     # what a file/dir/type contains: signatures + line ranges, no bodies
 grepum show OrderService.get     # its source: exactly the function, with doc comment/decorators
 grepum callers OrderService.get | grepum show -   # ...of every caller (any `path:line` input works)
@@ -83,8 +84,9 @@ scroll to zoom; links like `graph.html#focus=Flask.wsgi_app` reopen a view.
 <git-dir>/grepum/<ver>/overlay.graph                  L3: this worktree's dirty state (private)
 ```
 
-1. **L1, facts by blob.** Each file is parsed with tree-sitter into definitions,
-   references, imports and type bindings. Facts depend only on content, so
+1. **L1, facts by blob.** Each file is parsed with tree-sitter into definitions
+   (including fields), calls, type uses, member accesses, imports and type
+   bindings. Facts depend only on content, so
    they're keyed by the blob id git already computed. A file that's identical
    in ten worktrees or a hundred commits is parsed once.
 2. **L2, graph by tree.** Cross-file resolution (imports, re-exports, receiver
@@ -111,6 +113,14 @@ Resolution is conservative. Edges are `exact` when proven by scope, imports
 or types, `inferred` when the name is globally unique, and dropped when
 ambiguous. Receivers whose type is known to be external (`app: Express`,
 `rows: list`) are never linked to a same-named local method.
+
+`grepum refs` adds type uses and member accesses to calls, by the same rules
+and without guessing: `x.line` links only when `x`'s type is known (a
+parameter, `self`, a typed field or variable, C++'s implicit `this->`), and a
+type name links only to what the file can see (its own types, imports, its Go
+package; for C++ also a project-unique name). Loop variables and untyped
+receivers aren't typed yet, so treat an empty or short list like `callers`:
+not proof there are no other uses.
 
 ## C++ and Unreal Engine
 

@@ -1,7 +1,28 @@
 # Changelog
 
-## Unreleased
+## 0.5.0
 
+- **`grepum refs <Symbol>`**: every place that uses a symbol, beside calls:
+  constructions, subclasses, type uses (signatures, annotations, generic
+  arguments, struct literals and patterns) and member accesses (reads,
+  writes, a method passed as a value). One line per site with its code, so
+  `grepum refs X | grepum show -` prints the functions that use it.
+  `-k field,type,...` filters by kind. Members link only through a known
+  receiver type (`self`, typed parameters and fields, C++ implicit `this->`);
+  generic parameters, unknown receivers and same-named types in other files
+  aren't linked.
+- **Fields are definitions** (`DefKind::Field`): struct and class fields,
+  `self.x`/`this.x` assignments, class attributes, TS constructor parameter
+  properties and interface properties, with Unreal `UPROPERTY` specifiers.
+  `outline` lists them; `show Type.field` prints one. `find` leaves them out,
+  and a bare name prefers a function over a field.
+- Call and inherit edges, and their statistics, are unchanged on every
+  benchmark repo (flask, hono, ripgrep, fzf, leveldb, grepum). Indexing from
+  scratch takes 5-30% longer and the cache grows 40-100%; queries take as
+  long as before. `index` reports how many type uses and member accesses
+  linked.
+- `outline` signatures stop before comments that precede the body
+  (`def push(self) -> None:  # ...`).
 - **`grepum outline <file|dir|Type>`**: a table of contents. One line per
   definition with its line range, its signature (the source up to its body,
   on one line) and how many places call it; no bodies. A type lists its

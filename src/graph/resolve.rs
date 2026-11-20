@@ -4,6 +4,10 @@
 //! target is proven by scope, imports or receiver types, `Inferred` when the
 //! name is globally unique, and dropped when it is ambiguous. A missing edge
 //! is cheaper for an agent than a confidently wrong one.
+//!
+//! Type uses and member accesses (`RefKind::Type`/`Field`) become `Ref` edges
+//! by the same rules. Fields are definitions of their own kind, indexed apart
+//! from everything call resolution looks at, so they can't change a call edge.
 
 use super::*;
 use crate::lang::{self, dir_of, Modules, Rules, Target};
@@ -43,6 +47,8 @@ struct Resolver<'a> {
     by_name: HashMap<String, Vec<u32>>,
     top_level: HashMap<(u32, String), Vec<u32>>,
     methods: HashMap<(String, String), Vec<u32>>,
+    /// (owner type name, field name) -> field definitions.
+    fields: HashMap<(String, String), Vec<u32>>,
     owner_fields: HashMap<(String, String), Vec<(u32, TypeHint)>>,
     dirs: HashMap<String, Vec<u32>>,
     /// Each language's module index, by language name.
@@ -79,6 +85,8 @@ pub(super) fn link(inputs: Vec<Input>, project: &[(String, Vec<u8>)]) -> Graph {
         stats.inferred += s.inferred;
         stats.ambiguous += s.ambiguous;
         stats.unresolved += s.unresolved;
+        stats.uses += s.uses;
+        stats.uses_linked += s.uses_linked;
     }
     let mut imports: Vec<(u32, u32)> = vec![];
     for (fi, c) in r.ctx.iter().enumerate() {
@@ -145,8 +153,15 @@ impl<'a> Resolver<'a> {
         let mut top_level: HashMap<(u32, String), Vec<u32>> = HashMap::new();
         let mut methods: HashMap<(String, String), Vec<u32>> = HashMap::new();
         let mut nested: HashMap<(u32, String), Vec<u32>> = HashMap::new();
+        let mut fields: HashMap<(String, String), Vec<u32>> = HashMap::new();
         for (i, d) in defs.iter().enumerate() {
             let i = i as u32;
+            if d.kind == DefKind::Field {
+                if let Some(o) = &d.owner {
+                    fields.entry((o.clone(), d.name.clone())).or_default().push(i);
+                }
+                continue;
+            }
             by_name.entry(d.name.clone()).or_default().push(i);
             if let Some(p) = d.parent.filter(|p| defs[*p as usize].kind.is_callable()) {
                 nested.entry((p, d.name.clone())).or_default().push(i);
@@ -176,6 +191,7 @@ impl<'a> Resolver<'a> {
             by_name,
             top_level,
             methods,
+            fields,
             owner_fields,
             dirs,
             modules,
@@ -211,7 +227,7 @@ impl<'a> Resolver<'a> {
     fn is_call_target(&self, d: u32) -> bool {
         let def = &self.defs[d as usize];
         match def.kind {
-            DefKind::Interface | DefKind::Object => false,
+            DefKind::Interface | DefKind::Object | DefKind::Field => false,
             DefKind::Type => self.rules(def.file).type_aliases_callable,
             _ => true,
         }
@@ -435,6 +451,18 @@ impl<'a> Resolver<'a> {
     }
 
     fn methods_of(&self, types: &[u32], name: &str) -> Vec<u32> {
+        self.members_of(&self.methods, types, name, false)
+    }
+
+    /// Fields declared in one of `types` (or a base): a field nested in a type
+    /// belongs to that type only, not to same-named types in other files.
+    fn fields_of(&self, types: &[u32], name: &str) -> Vec<u32> {
+        self.members_of(&self.fields, types, name, true)
+    }
+
+    /// Members `name` of `types` in `index` (methods or fields), nearest first
+    /// up the base classes. With `own`, members nested in a different type are skipped.
+    fn members_of(&self, index: &HashMap<(String, String), Vec<u32>>, types: &[u32], name: &str, own: bool) -> Vec<u32> {
         let mut out = vec![];
         let mut seen = HashSet::new();
         let mut queue: Vec<u32> = types.to_vec();
@@ -443,13 +471,18 @@ impl<'a> Resolver<'a> {
                 continue;
             }
             let tname = &self.defs[t as usize].name;
-            if let Some(m) = self.methods.get(&(tname.clone(), name.to_string())) {
+            if let Some(m) = index.get(&(tname.clone(), name.to_string())) {
                 let tfile = self.defs[t as usize].file;
                 // Methods attach by owner *name*; for languages with in-class methods keep the same file.
                 let filtered: Vec<u32> = if self.rules(tfile).methods_in_class_file {
                     m.iter().copied().filter(|d| self.defs[*d as usize].file == tfile).collect()
                 } else {
                     m.clone()
+                };
+                let filtered: Vec<u32> = if own {
+                    filtered.into_iter().filter(|d| self.defs[*d as usize].parent.is_none_or(|p| p == t)).collect()
+                } else {
+                    filtered
                 };
                 if !filtered.is_empty() {
                     out.extend(filtered);
@@ -863,12 +896,93 @@ impl<'a> Resolver<'a> {
         self.bases = bases;
     }
 
+    /// The type a type name used on `line` means: of several declared in this
+    /// file (block-scoped test types), the nearest one above; else imported,
+    /// in the same package, or (by [`Rules::global_type_names`]) unique in the project.
+    fn types_for_reference(&self, file: u32, name: &str, line: u32) -> Vec<u32> {
+        let is_type = |d: &u32| self.defs[*d as usize].kind.is_type();
+        let local: Vec<u32> = self.top_level.get(&(file, name.to_string())).into_iter().flatten().copied().filter(is_type).collect();
+        let found = if local.len() > 1 {
+            local.iter().copied().filter(|d| self.defs[*d as usize].line <= line).max_by_key(|d| self.defs[*d as usize].line).into_iter().collect()
+        } else if !local.is_empty() {
+            local
+        } else if self.rules(file).global_type_names {
+            self.types_named_raw(file, name)
+        } else {
+            let mut found: Vec<u32> = match self.ctx[file as usize].imports.get(name) {
+                Some(Target::Symbol(f, orig)) => self.exported(f, orig, 4).into_iter().filter(is_type).collect(),
+                _ => vec![],
+            };
+            if found.is_empty() && !self.ctx[file as usize].imports.contains_key(name) {
+                for w in &self.ctx[file as usize].wildcards {
+                    found = self.exported(w, name, 4).into_iter().filter(is_type).collect();
+                    if !found.is_empty() {
+                        break;
+                    }
+                }
+            }
+            if found.is_empty() && self.rules(file).package_scope {
+                let dir = dir_of(&self.files[file as usize].path);
+                found = self.dirs.get(dir).into_iter().flatten().flat_map(|f| self.exported(&[*f], name, 0)).filter(is_type).collect();
+            }
+            found
+        };
+        self.follow_aliases(found, 4)
+    }
+
+    /// Targets of a type use or member access, by the rules calls follow; no guessing
+    /// on unknown receivers.
+    fn resolve_reference(&self, file: u32, r: &Ref) -> Vec<u32> {
+        let rules = self.rules(file);
+        let owner = r.owner.as_deref();
+        let is_type = |d: &u32| self.defs[*d as usize].kind.is_type();
+        let name = r.name.as_str();
+        match (r.kind, r.qualifier.as_deref()) {
+            (RefKind::Type, None) => self.types_for_reference(file, name, r.line),
+            (RefKind::Type, Some(q)) => match self.resolve_qualifier(file, r.scope, owner, q, 4) {
+                Thing::Module(_, files) => self.exported(&files, name, 4).into_iter().filter(is_type).collect(),
+                Thing::External | Thing::Types(_) => vec![],
+                // `ns::Pool`: C++ namespaces aren't modules.
+                Thing::Unknown if rules.static_scope_calls => self.types_for_reference(file, name, r.line),
+                Thing::Unknown => vec![],
+            },
+            // A bare name in a method: a member through implicit `this->`, unless a local hides it.
+            (RefKind::Field, None) => match owner {
+                Some(o) if rules.implicit_this && !self.is_local(file, r.scope, name, r.line) => self.fields_of(&self.owner_types(file, o), name),
+                _ => vec![],
+            },
+            (RefKind::Field, Some("?")) => vec![],
+            (RefKind::Field, Some(q)) => match self.resolve_qualifier(file, r.scope, owner, q, 4) {
+                Thing::Types(ts) if !ts.is_empty() => {
+                    let f = self.fields_of(&ts, name);
+                    // A method used as a value: `this.handle` passed as a callback.
+                    if f.is_empty() { self.methods_of(&ts, name) } else { f }
+                }
+                Thing::Module(_, files) => self.exported(&files, name, 4),
+                _ => vec![],
+            },
+            _ => vec![],
+        }
+    }
+
     fn resolve_file(&self, fi: u32) -> (Vec<Edge>, Stats) {
         let facts = &self.inputs[fi as usize].facts;
         let mut edges = vec![];
         let mut stats = Stats::default();
         let mut seen: HashSet<(Option<u32>, u32)> = HashSet::new();
-        for r in facts.refs.iter().filter(|r| r.kind != RefKind::Inherit) {
+        let mut seen_refs: HashSet<(Option<u32>, u32, u32)> = HashSet::new();
+        for r in facts.refs.iter().filter(|r| matches!(r.kind, RefKind::Type | RefKind::Field)) {
+            let from_def = r.scope.map(|s| self.global_def(fi, s));
+            let targets = self.resolve_reference(fi, r);
+            stats.uses += 1;
+            stats.uses_linked += u64::from(!targets.is_empty());
+            for t in targets {
+                if seen_refs.insert((from_def, t, r.line)) {
+                    edges.push(Edge { from_file: fi, from_def, to: t, kind: EdgeKind::Ref, conf: Conf::Exact, line: r.line });
+                }
+            }
+        }
+        for r in facts.refs.iter().filter(|r| matches!(r.kind, RefKind::Call | RefKind::New)) {
             stats.refs += 1;
             let (targets, conf) = self.resolve_call(fi, r.scope, r.owner.as_deref(), &Callee { name: &r.name, qualifier: r.qualifier.as_deref(), line: r.line }, 6);
             let Some(conf) = conf else {

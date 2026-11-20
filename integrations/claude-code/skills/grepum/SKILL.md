@@ -16,6 +16,7 @@ including uncommitted edits**. There is no index step to remember.
 | Where is something? | `grepum find <words>`: ranked; `order service`, `apply damage` |
 | Who calls it? | `grepum callers <Symbol>` (`--depth 3` for transitive impact) |
 | What does it call? | `grepum callees <Symbol>` |
+| Where is this type / field / method used? | `grepum refs <Symbol>`: calls, constructions, type uses, field reads and writes, subclasses, one line per site with its code; `-k field` or `-k type` to narrow |
 | What is in this file / class / directory? | `grepum outline <path\|dir\|Type>`: one line per definition with its signature, line range and caller count, no bodies; `-d 1` for top level only. Pick one, then `grepum show path:line` |
 | Read its code | `grepum show <Symbol>`: exactly the function's body plus its doc comment and decorators; `--callees` adds what it calls; `grepum callers X \| grepum show -` reads every caller |
 | Orient on a feature | `grepum context <words>`: matches plus 1-hop callers and callees |
@@ -40,6 +41,10 @@ output.
    `rg -n <pattern> . | grepum show -` shows the functions around text matches.
 3. Before changing a function's signature or behaviour, run
    `grepum callers <Symbol> --depth 2` and check every caller you'll affect.
+   Before changing a type or a field (renaming it, adding a required field),
+   run `grepum refs <Type>` / `grepum refs <Type.field>`: it also lists struct
+   literals, annotations and member accesses. Members are only linked through
+   receivers whose type is known, so confirm with `rg -w <name>` before a rename.
 4. After your edits, `grepum diff HEAD` shows what you changed structurally:
    new/removed functions and call edges. Use it to sanity-check a refactor.
 

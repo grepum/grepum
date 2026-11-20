@@ -9,6 +9,7 @@ mod install;
 mod lang;
 mod outline;
 mod query;
+mod refs;
 mod show;
 mod snapshot;
 mod store;
@@ -83,6 +84,14 @@ enum Cmd {
         symbol: String,
         #[arg(short, long, default_value_t = 1)]
         depth: u32,
+    },
+    /// Every place that uses a symbol: calls, constructions, subclasses, type uses
+    /// and member reads/writes, one line per site with its code (pipes into `show -`).
+    Refs {
+        symbol: String,
+        /// Only these uses, comma-separated: call, new, inherit, type, field, value.
+        #[arg(short = 'k', long, value_delimiter = ',')]
+        kind: Vec<String>,
     },
     /// Print a definition's source, as far as its syntax reaches, with its doc comment,
     /// attributes and decorators. `-` reads targets from stdin: any `path:line`
@@ -298,26 +307,30 @@ fn main() -> Result<()> {
     match cli.cmd {
         Cmd::Index { rebuild, quiet } => {
             let s = snapshot(&repo, &store, rev, rebuild)?;
+            let (edges, references) = s.graph.edge_counts();
             if cli.json {
                 let st = &s.graph.stats;
                 print_json(&serde_json::json!({
                     "label": s.label, "source": s.report.source, "files": s.graph.files.len(), "defs": s.graph.defs.len(),
-                    "edges": s.graph.edges.len(), "facts_cached": s.report.facts_cached, "facts_extracted": s.report.facts_extracted,
+                    "edges": edges, "references": references, "facts_cached": s.report.facts_cached, "facts_extracted": s.report.facts_extracted,
                     "ms": s.report.ms, "refs": st.refs, "exact": st.exact, "inferred": st.inferred,
                 }));
             } else if !quiet {
                 let r = &s.report;
                 println!("{}", s.label);
                 println!(
-                    "  {} files, {} symbols, {} edges  [{}; {} facts reused, {} extracted]  {:.1} ms",
-                    s.graph.files.len(), s.graph.defs.len(), s.graph.edges.len(), r.source, r.facts_cached, r.facts_extracted, r.ms
+                    "  {} files, {} symbols, {edges} edges, {references} references  [{}; {} facts reused, {} extracted]  {:.1} ms",
+                    s.graph.files.len(), s.graph.defs.len(), r.source, r.facts_cached, r.facts_extracted, r.ms
                 );
                 let st = &s.graph.stats;
                 if st.refs > 0 {
                     println!(
-                        "  references: {} exact, {} inferred, {} ambiguous (dropped), {} external/unknown",
+                        "  calls: {} exact, {} inferred, {} ambiguous (dropped), {} external/unknown",
                         st.exact, st.inferred, st.ambiguous, st.unresolved
                     );
+                }
+                if st.uses > 0 {
+                    println!("  type uses and member accesses: {} linked, {} external/unknown", st.uses_linked, st.uses - st.uses_linked);
                 }
             }
         }
@@ -325,7 +338,11 @@ fn main() -> Result<()> {
             let (shared, local) = store.disk_usage();
             let s = snapshot(&repo, &store, rev, false)?;
             println!("worktree      {}", repo.toplevel.display());
-            println!("graph         {}  ({} files, {} symbols, {} edges, {})", s.label, s.graph.files.len(), s.graph.defs.len(), s.graph.edges.len(), s.report.source);
+            let (edges, references) = s.graph.edge_counts();
+            println!(
+                "graph         {}  ({} files, {} symbols, {edges} edges, {references} references, {})",
+                s.label, s.graph.files.len(), s.graph.defs.len(), s.report.source
+            );
             println!("shared cache  {}  ({:.1} KiB, all worktrees)", store.shared.display(), shared as f64 / 1024.0);
             println!("local cache   {}  ({:.1} KiB, this worktree)", store.local.display(), local as f64 / 1024.0);
         }
@@ -338,7 +355,7 @@ fn main() -> Result<()> {
             }
             let langs: Vec<String> = langs.iter().map(|(l, n)| format!("{l} {n}")).collect();
             println!("grepum code graph: {}", s.label);
-            println!("  {} files ({}), {} symbols, {} call/inherit edges", g.files.len(), langs.join(", "), g.defs.len(), g.edges.len());
+            println!("  {} files ({}), {} symbols, {} call/inherit edges", g.files.len(), langs.join(", "), g.defs.len(), g.edge_counts().0);
             let idx = query::Index::new(g);
             let mut hubs: Vec<(usize, u32)> = idx
                 .incoming
@@ -463,6 +480,26 @@ fn main() -> Result<()> {
                         println!("  note: not proof it's unused; confirm with a text search, e.g. `rg -w {name}`");
                     }
                 }
+            }
+        }
+        Cmd::Refs { ref symbol, ref kind } => {
+            let only: Vec<refs::Use> = kind
+                .iter()
+                .map(|k| refs::Use::parse(k.trim()).ok_or_else(|| anyhow::anyhow!("unknown kind {k:?} (call, new, inherit, type, field, value)")))
+                .collect::<Result<_>>()?;
+            let s = snapshot(&repo, &store, rev, false)?;
+            let g = &s.graph;
+            let targets = query::resolve_symbol(g, symbol);
+            if targets.is_empty() {
+                bail!("no symbol named {symbol:?} (try `grepum find <words>`, or `grepum outline <Type>` for its fields)");
+            }
+            let idx = query::Index::new(g);
+            let sites = refs::sites(g, &idx, &targets, &only);
+            let mut src = show::Source::new(&repo, rev);
+            if cli.json {
+                print_json(&refs::json(g, &mut src, &targets, &sites));
+            } else {
+                refs::print(g, &mut src, &targets, &sites);
             }
         }
         Cmd::Show { targets, max_lines, no_line_numbers, callees, limit } => {

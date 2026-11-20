@@ -14,7 +14,7 @@ const SLOT: &str = "/*__GREPUM_DATA__*/";
 /// Compact JSON the viewer reads: defs as [qual, kind, file, line] and edges
 /// as flat [from, to, ...] arrays keep large repos to a few MB.
 fn data(g: &Graph, label: &str) -> serde_json::Value {
-    const KINDS: [&str; 10] = ["fn", "method", "class", "interface", "struct", "enum", "trait", "type", "mod", "object"];
+    const KINDS: [&str; 11] = ["fn", "method", "class", "interface", "struct", "enum", "trait", "type", "mod", "object", "field"];
     let kind_ix = |k: &str| KINDS.iter().position(|x| *x == k).unwrap_or(0);
     let defs: Vec<serde_json::Value> =
         g.defs.iter().map(|d| json!([d.qual, kind_ix(d.kind.label()), d.file, d.line])).collect();
@@ -22,6 +22,9 @@ fn data(g: &Graph, label: &str) -> serde_json::Value {
     let (mut calls, mut inherits) = (vec![], vec![]);
     for e in &g.edges {
         let Some(from) = e.from_def else { continue };
+        if e.kind == EdgeKind::Ref {
+            continue;
+        }
         if !seen.insert((from, e.to, e.kind)) {
             continue;
         }

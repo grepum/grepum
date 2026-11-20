@@ -228,12 +228,23 @@ fn signature(raw: &[u8], n: Node) -> String {
     tidy(&text)
 }
 
-/// Where the body of `n` starts. Looks a few levels down, so that
-/// `export const f = (x) => { ... }` finds the arrow function's body, but not
-/// into an object literal's methods.
+/// Where the signature of `n` ends: before its body, and before comments
+/// that precede the body (Python's `def f():  # note`). Looks a few levels
+/// down, so that `export const f = (x) => { ... }` finds the arrow function's
+/// body, but not into an object literal's methods.
 fn body_start(n: Node, depth: usize) -> Option<usize> {
     if let Some(b) = n.child_by_field_name("body") {
-        return Some(b.start_byte());
+        let mut end = b.start_byte();
+        let mut cursor = n.walk();
+        for c in n.children(&mut cursor) {
+            if c.id() == b.id() {
+                break;
+            }
+            if !c.kind().contains("comment") {
+                end = c.end_byte();
+            }
+        }
+        return Some(end.min(b.start_byte()));
     }
     if depth >= 3 {
         return None;

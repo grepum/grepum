@@ -2,11 +2,15 @@
 //! node to the file's language (`lang::*::visit`), which records definitions,
 //! calls, imports and type bindings. Anything a language doesn't claim is
 //! walked generically. The walker's helpers here are language-neutral.
+//!
+//! A second pass ([`Walker::collect_references`]) asks the language for the
+//! non-call references at every node (type names, member accesses) and
+//! records them with the definition they're written in.
 
 use crate::facts::*;
 use crate::lang::{self, Language};
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use tree_sitter::{Node, Parser};
 
 thread_local! {
@@ -30,9 +34,12 @@ pub fn extract(lang: Lang, raw: &[u8]) -> FileFacts {
         owners: vec![],
         cur_line: 0,
         attrs,
+        def_ranges: HashMap::new(),
+        fields: HashSet::new(),
     };
     if let Some(tree) = tree {
         w.visit(tree.root_node());
+        w.collect_references(tree.root_node());
     }
     w.facts.defs.extend(extra_defs);
     w.facts
@@ -82,6 +89,86 @@ pub struct Walker<'a> {
     cur_line: u32,
     /// Attributes (Unreal reflection specifiers) keyed by the line of the declaration they annotate.
     attrs: HashMap<u32, Vec<String>>,
+    /// Byte range of each definition's node (fields aside): the scopes of the reference pass.
+    def_ranges: HashMap<(usize, usize), u32>,
+    /// (owner, name) of the fields recorded so far, so `self.x = ...` in several methods is one field.
+    fields: HashSet<(String, String)>,
+}
+
+/// A non-call reference a language found at a node (see [`Language::references`]).
+pub struct Reference {
+    pub kind: RefKind,
+    pub name: String,
+    pub qualifier: Option<String>,
+    pub line: u32,
+}
+
+/// A node offered to [`Language::references`], with what's around it. The
+/// pass keeps its own ancestor stack: tree-sitter's `Node::parent` re-walks
+/// from the root, which is quadratic on deeply nested code (long type unions).
+pub struct RefSite<'s, 't> {
+    pub node: Node<'t>,
+    ancestors: &'s [Node<'t>],
+    /// Generic parameter names declared by each ancestor (`<T>`, `template <typename T>`).
+    generics: &'s [Vec<String>],
+    /// Inside a method (for implicit `this->` members).
+    pub in_method: bool,
+}
+
+impl<'t> RefSite<'_, 't> {
+    pub fn parent(&self) -> Option<Node<'t>> {
+        self.ancestors.last().copied()
+    }
+
+    pub fn parent_kind(&self) -> &'static str {
+        self.parent().map(|p| p.kind()).unwrap_or("")
+    }
+
+    pub fn grandparent(&self) -> Option<Node<'t>> {
+        self.ancestors.len().checked_sub(2).map(|i| self.ancestors[i])
+    }
+
+    /// Whether the node is the `field` child of its parent, and the parent is one of `kinds`.
+    pub fn is_field_of(&self, field: &str, kinds: &[&str]) -> bool {
+        self.parent().is_some_and(|p| kinds.contains(&p.kind()) && p.child_by_field_name(field).is_some_and(|c| c.id() == self.node.id()))
+    }
+
+    /// Whether the node is the function being called (`a.b` in `a.b()`, `T::new`
+    /// in `T::new()`), seen through generic arguments (`x.collect::<T>()`).
+    pub fn is_callee(&self) -> bool {
+        let mut cur = self.node;
+        for p in self.ancestors.iter().rev() {
+            if matches!(p.kind(), "generic_function" | "template_function" | "template_method") {
+                cur = *p;
+                continue;
+            }
+            return ["function", "constructor"].iter().any(|f| p.child_by_field_name(f).is_some_and(|c| c.id() == cur.id()));
+        }
+        false
+    }
+
+    /// Whether `name` is a generic parameter of an enclosing declaration, not a project type.
+    pub fn is_type_parameter(&self, name: &str) -> bool {
+        self.generics.iter().any(|g| g.iter().any(|x| x == name))
+    }
+}
+
+/// Generic parameter names `n` declares: `type_parameters` (Rust, TS, Go) or a C++ template's `parameters`.
+fn generic_names(src: &[u8], n: Node) -> Vec<String> {
+    let list = n.child_by_field_name("type_parameters").or_else(|| {
+        if n.kind() == "template_declaration" { n.child_by_field_name("parameters") } else { None }
+    });
+    let Some(list) = list else { return vec![] };
+    let text = |x: Node| String::from_utf8_lossy(&src[x.byte_range()]).into_owned();
+    children(list)
+        .into_iter()
+        .filter_map(|p| {
+            p.child_by_field_name("name").or(p.child_by_field_name("left")).or_else(|| {
+                if matches!(p.kind(), "type_identifier" | "identifier") { Some(p) } else { children(p).into_iter().find(|c| c.kind() == "type_identifier") }
+            })
+        })
+        .map(text)
+        .collect()
 }
 
 pub fn children<'t>(n: Node<'t>) -> Vec<Node<'t>> {
@@ -147,6 +234,7 @@ impl<'a> Walker<'a> {
 
     pub fn add_def_full(&mut self, name: &str, kind: DefKind, node: Node, owner: Option<String>, ret: Option<String>, decl: bool) -> u32 {
         let idx = self.facts.defs.len() as u32;
+        self.def_ranges.entry((node.start_byte(), node.end_byte())).or_insert(idx);
         let attrs = self.attrs.remove(&line(node)).unwrap_or_default();
         self.facts.defs.push(Def {
             name: name.to_string(),
@@ -207,6 +295,125 @@ impl<'a> Walker<'a> {
                 owner: Some(subject.to_string()),
             });
         }
+    }
+
+    /// A field `name` of type `owner`, declared (or first assigned) at `node`.
+    /// With a type hint it is also bound, as before fields were definitions, so
+    /// receivers like `self.repo.find()` resolve. Recorded once per type and name.
+    pub fn add_field(&mut self, owner: &str, name: &str, node: Node, hint: Option<TypeHint>) {
+        if name.is_empty() {
+            return;
+        }
+        if let Some(h) = hint {
+            self.add_binding(BindingScope::Owner(owner.to_string()), name, h);
+        }
+        if !self.fields.insert((owner.to_string(), name.to_string())) {
+            return;
+        }
+        // Nested in its type: the one being walked (class bodies) or the one around it (Rust/Go structs).
+        let at = line(node);
+        let parent = self
+            .scopes
+            .iter()
+            .rev()
+            .copied()
+            .find(|s| {
+                let d = &self.facts.defs[*s as usize];
+                d.kind.is_type() && d.name == owner
+            })
+            .or_else(|| {
+                let around = |d: &Def| d.kind.is_type() && d.name == owner && d.line <= at && at <= d.end_line;
+                self.facts.defs.iter().rposition(around).map(|i| i as u32)
+            });
+        let attrs = self.attrs.remove(&line(node)).unwrap_or_default();
+        self.facts.defs.push(Def {
+            name: name.to_string(),
+            kind: DefKind::Field,
+            line: line(node),
+            end_line: node.end_position().row as u32 + 1,
+            parent,
+            owner: Some(owner.to_string()),
+            ret: None,
+            decl: false,
+            attrs,
+            body: fingerprint(&self.src[node.byte_range()]),
+        });
+    }
+
+    /// The reference pass: every node is offered to the language, and what it
+    /// finds is recorded in the innermost definition around it.
+    fn collect_references(&mut self, root: Node) {
+        // (end byte, def) of the definitions around the current node.
+        let mut stack: Vec<(usize, u32)> = vec![];
+        let mut ancestors: Vec<Node> = vec![];
+        let mut generics: Vec<Vec<String>> = vec![];
+        let mut found: Vec<Reference> = vec![];
+        let mut cursor = root.walk();
+        'walk: loop {
+            let n = cursor.node();
+            while stack.last().is_some_and(|(end, _)| *end <= n.start_byte()) {
+                stack.pop();
+            }
+            if let Some(d) = self.def_ranges.get(&(n.start_byte(), n.end_byte())) {
+                if stack.last().map(|(_, s)| s) != Some(d) {
+                    stack.push((n.end_byte(), *d));
+                }
+            }
+            let scope = stack.last().map(|(_, d)| *d);
+            let owner = scope.and_then(|s| self.owner_of(s));
+            let in_method = owner.is_some() && scope.is_some_and(|s| self.facts.defs[s as usize].kind.is_callable());
+            let site = RefSite { node: n, ancestors: &ancestors, generics: &generics, in_method };
+            let descend = self.support.references(self, &site, &mut found);
+            for r in found.drain(..) {
+                if r.name.is_empty() {
+                    continue;
+                }
+                self.facts.refs.push(Ref { kind: r.kind, name: r.name, qualifier: r.qualifier, line: r.line, scope, owner: owner.clone() });
+            }
+            if descend && cursor.goto_first_child() {
+                ancestors.push(n);
+                generics.push(generic_names(self.src, n));
+                continue;
+            }
+            loop {
+                if cursor.goto_next_sibling() {
+                    continue 'walk;
+                }
+                if !cursor.goto_parent() {
+                    break 'walk;
+                }
+                ancestors.pop();
+                generics.pop();
+            }
+        }
+    }
+
+    /// The type `self` means inside definition `d`.
+    fn owner_of(&self, d: u32) -> Option<String> {
+        let mut cur = Some(d);
+        while let Some(i) = cur {
+            let def = &self.facts.defs[i as usize];
+            if def.kind.is_type() {
+                return Some(def.name.clone());
+            }
+            if let Some(o) = &def.owner {
+                return Some(o.clone());
+            }
+            cur = def.parent;
+        }
+        None
+    }
+
+    /// A member access node (`a.b`, `a->b`, `a.b` in Python/Go/TS) as a field reference.
+    pub fn member_ref(&self, n: Node) -> Option<Reference> {
+        let (name, qualifier) = self.split_callee(n);
+        Some(Reference { kind: RefKind::Field, name: name?, qualifier: Some(qualifier?), line: line(n) })
+    }
+
+    /// A type name node (`Repo`, `db::Pool`, `pkg.Conn`) as a type reference.
+    pub fn type_ref(&self, n: Node) -> Option<Reference> {
+        let (name, qualifier) = self.split_callee(n);
+        Some(Reference { kind: RefKind::Type, name: name?, qualifier, line: line(n) })
     }
 
     pub fn add_binding(&mut self, scope: BindingScope, name: &str, ty: TypeHint) {

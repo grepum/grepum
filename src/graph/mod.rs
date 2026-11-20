@@ -35,6 +35,8 @@ pub struct GDef {
 pub enum EdgeKind {
     Call,
     Inherit,
+    /// A type use or member access (`RefKind::Type`/`Field`): one edge per site.
+    Ref,
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -60,6 +62,9 @@ pub struct Stats {
     pub inferred: u64,
     pub ambiguous: u64,
     pub unresolved: u64,
+    /// Type uses and member accesses seen, and how many linked to a project definition.
+    pub uses: u64,
+    pub uses_linked: u64,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
@@ -70,6 +75,14 @@ pub struct Graph {
     /// importer file -> imported file
     pub imports: Vec<(u32, u32)>,
     pub stats: Stats,
+}
+
+impl Graph {
+    /// Call and inherit edges, and type-use/member-access edges.
+    pub fn edge_counts(&self) -> (usize, usize) {
+        let refs = self.edges.iter().filter(|e| e.kind == EdgeKind::Ref).count();
+        (self.edges.len() - refs, refs)
+    }
 }
 
 pub struct Input {

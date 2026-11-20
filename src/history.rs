@@ -101,7 +101,7 @@ fn symbols(f: &FileFacts) -> Vec<Sym> {
             _ => d.name.clone(),
         };
         quals.push(qual.clone());
-        if d.decl || d.kind == DefKind::Module {
+        if d.decl || d.kind == DefKind::Module || d.kind == DefKind::Field {
             continue;
         }
         out.push(Sym { qual, name: d.name.clone(), kind: d.kind, line: d.line, body: d.body });

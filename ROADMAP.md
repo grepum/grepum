@@ -17,7 +17,10 @@ promised; open an issue if something matters to you.
 - C++ overload resolution by argument types (calls currently link to one
   overload of a set).
 - Templates beyond the known Unreal Engine helpers.
-- `export default` tracking and tsconfig `paths` for TypeScript.
+- Element types for loop variables (`for b in &facts.bindings`), so members
+  and calls on them link.
+- C++ export macros other than Unreal's `*_API` (`class LEVELDB_EXPORT Status`
+  is currently misparsed).
 - Python decorators as call edges.
 - Community detection (clusters of related symbols) to improve `grepum summary`.
 

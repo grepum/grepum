@@ -38,6 +38,8 @@ pub enum DefKind {
     /// A JS/TS object literal bound to a top-level name (`const api = { get() {} }`):
     /// a namespace of methods, reached as `api.get()`.
     Object,
+    /// A field or property of a type (struct field, class attribute, `self.x`).
+    Field,
 }
 
 impl DefKind {
@@ -62,6 +64,7 @@ impl DefKind {
             DefKind::Type => "type",
             DefKind::Module => "mod",
             DefKind::Object => "object",
+            DefKind::Field => "field",
         }
     }
 }
@@ -95,6 +98,12 @@ pub enum RefKind {
     New,
     /// `subject` extends/implements `name`.
     Inherit,
+    /// A type named where a type is expected (annotation, signature, generic
+    /// argument, struct literal), or as the path of `Type::member`.
+    Type,
+    /// A member read, written or passed without calling it: `a.b`, `self.x = 1`,
+    /// `Binding { line, .. }`, C++ `count_` in a method (implicit `this->`).
+    Field,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
