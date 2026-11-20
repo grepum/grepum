@@ -1042,7 +1042,13 @@ impl<'a> Walker<'a> {
                 let nm = f("name").or_else(|| f("declarator").filter(|d| d.kind() == "type_identifier"));
                 if let Some(nm) = nm {
                     let name = self.text(nm).to_string();
-                    self.add_def(&name, DefKind::Type, n, None, None);
+                    // `using Core = ns::JobCore;` / `typedef ns::JobCore Core;`: keep the
+                    // target so a receiver typed `Core` resolves to JobCore's methods.
+                    let target = f("type")
+                        .map(|t| if t.kind() == "type_descriptor" { t.child_by_field_name("type").unwrap_or(t) } else { t })
+                        .and_then(|t| self.type_name(t))
+                        .filter(|t| *t != name);
+                    self.add_def(&name, DefKind::Type, n, None, target);
                 }
                 false
             }

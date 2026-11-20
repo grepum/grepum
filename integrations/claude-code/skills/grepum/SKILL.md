@@ -72,3 +72,23 @@ output.
 All worktrees of a repository share one cache in the git common directory.
 A fresh `git worktree add` (or a Claude Code worktree session) is queryable
 immediately. Each worktree's uncommitted edits stay private to it.
+
+## What grepum can't see
+
+grepum is a static call graph. Use it to find what calls a symbol before you
+change it, then read the code; don't treat it as the whole truth.
+
+- **"(no callers found)" is not proof of dead code.** Calls through receivers
+  it can't type (untyped parameters, macros, reflection, delegates bound by
+  name, data-driven dispatch) can be missed. Confirm with `rg -w <name>`
+  before deleting anything.
+- **Iteration by type is not a call.** Code that walks every
+  `ACharacter` with `TActorIterator` never "calls" the horse, so no query links
+  the two. Search for the type name instead.
+- **Data flow is not a call.** Two systems sharing a map key or a global are
+  invisible to it.
+- **Config and assets aren't in the graph** (`.ini`, `.json`, `.uasset`, data
+  tables). Grep those directly.
+- **`find` matches names, not behaviour.** If the first results are one class,
+  try the words a neighbouring class would use, or `grepum context <words>`.
+

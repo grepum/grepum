@@ -586,7 +586,36 @@ impl<'a> Resolver<'a> {
         out
     }
 
+    /// Types visible as `name` from `file`, with C++ type aliases followed to
+    /// the type they name.
     fn types_named(&self, file: u32, name: &str) -> Vec<u32> {
+        self.follow_aliases(self.types_named_raw(file, name), 4)
+    }
+
+    fn follow_aliases(&self, types: Vec<u32>, depth: u8) -> Vec<u32> {
+        if depth == 0 {
+            return types;
+        }
+        let mut out = Vec::with_capacity(types.len());
+        for t in types {
+            let d = &self.defs[t as usize];
+            let target = (d.kind == DefKind::Type && self.files[d.file as usize].lang == Lang::Cpp)
+                .then(|| self.inputs[d.file as usize].facts.defs[(t - self.files[d.file as usize].first_def) as usize].ret.clone())
+                .flatten();
+            match target {
+                Some(target) => {
+                    let resolved = self.follow_aliases(self.types_named_raw(d.file, &target), depth - 1);
+                    if resolved.is_empty() { out.push(t) } else { out.extend(resolved) }
+                }
+                None => out.push(t),
+            }
+        }
+        out.sort();
+        out.dedup();
+        out
+    }
+
+    fn types_named_raw(&self, file: u32, name: &str) -> Vec<u32> {
         let local: Vec<u32> = self
             .top_level
             .get(&(file, name.to_string()))
@@ -738,6 +767,22 @@ impl<'a> Resolver<'a> {
         out
     }
 
+    /// Types of member `field` of class `owner`, including members inherited
+    /// from in-repo base classes.
+    fn member_types(&self, file: u32, owner: &str, field: &str, depth: u8) -> Vec<u32> {
+        let mut types = self.owner_types(file, owner);
+        let mut i = 0;
+        while i < types.len() && types.len() < 32 {
+            for b in self.bases.get(&types[i]).cloned().unwrap_or_default() {
+                if !types.contains(&b) {
+                    types.push(b);
+                }
+            }
+            i += 1;
+        }
+        self.field_types(&types, field, depth)
+    }
+
     fn owner_types(&self, file: u32, owner: &str) -> Vec<u32> {
         let local: Vec<u32> = self
             .top_level
@@ -790,8 +835,17 @@ impl<'a> Resolver<'a> {
                 self.returns_of(targets)
             }
             h => {
+                let member = || -> Vec<u32> {
+                    match owner {
+                        Some(o) if lang == Lang::Cpp => self.member_types(file, o, h, depth),
+                        _ => vec![],
+                    }
+                };
                 if let Some(hint) = self.binding(file, scope, h) {
                     self.hint_thing(file, scope, owner, &hint, depth)
+                } else if let Some(ts) = Some(member()).filter(|t| !t.is_empty()) {
+                    // C++ implicit `this->`: a bare name in a method is a member before it's a type.
+                    Thing::Types(ts)
                 } else if let Some(t) = self.ctx[file as usize].imports.get(h) {
                     match t {
                         Target::Module(k, f) => Thing::Module(k.clone(), f.clone()),

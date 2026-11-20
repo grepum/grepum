@@ -105,8 +105,22 @@ pub fn find(g: &Graph, idx: &Index, query: &str, limit: usize) -> Vec<(f64, u32)
         })
         .collect();
     scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap().then(a.1.cmp(&b.1)));
-    scored.truncate(limit);
-    scored
+    // Keep the list broad: at most PER_OWNER members of the same type, so one
+    // class's methods can't push every other match off the page. The rest
+    // fill in afterwards if there's room.
+    const PER_OWNER: usize = 3;
+    let mut per: HashMap<&str, usize> = HashMap::new();
+    let (mut first, mut rest) = (vec![], vec![]);
+    for hit in scored {
+        let q = g.defs[hit.1 as usize].qual.as_str();
+        let owner = q.rsplit_once('.').map(|(o, _)| o).unwrap_or("");
+        let n = per.entry(owner).or_default();
+        *n += 1;
+        if owner.is_empty() || *n <= PER_OWNER { first.push(hit) } else { rest.push(hit) }
+    }
+    first.extend(rest);
+    first.truncate(limit);
+    first
 }
 
 /// `qual`, `name`, or `path/suffix.py:qual` → matching def ids.

@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.2.1
+
+- **C++: calls through members used without `this->` now resolve** (the
+  Unreal default), including `TUniquePtr`/`TSharedPtr` chains such as
+  `State->Rides->show(...)` and members inherited from base classes. On a
+  1,100-file Unreal project this added 764 call edges; the 39 edges it
+  removed were all wrong targets now replaced by the right class.
+- **C++ type aliases are followed** (`using Core = parts::JobCore;`, typedefs),
+  so receivers typed through an alias reach the real class.
+- **`callers` is honest about misses**: "(no callers found)" plus a reminder to
+  confirm with a text search before treating code as dead.
+- **Unknown symbols suggest the closest names** instead of only pointing at
+  `find`.
+- **`find` keeps results broad**: at most three members of one class before
+  other matches, so a neighbouring class isn't pushed off the list.
+- The Claude Code skill and agent now spell out what a call graph can't see
+  (iteration by type, shared data, config and asset files).
+
 ## 0.2.0
 
 - **`grepum html`**: a self-contained, offline HTML viewer for the graph. A

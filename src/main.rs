@@ -500,10 +500,16 @@ fn main() -> Result<()> {
             let s = snapshot(&repo, &store, rev, false)?;
             let g = &s.graph;
             let starts = query::resolve_symbol(g, symbol);
-            if starts.is_empty() {
-                bail!("no symbol named {symbol:?} (try `grepum find {symbol}`)");
-            }
             let idx = query::Index::new(g);
+            if starts.is_empty() {
+                // Suggest the closest names instead of making the caller guess again.
+                let words = symbol.replace("::", " ").replace(['.', '_'], " ");
+                let near: Vec<String> = query::find(g, &idx, &words, 5).into_iter().map(|(_, d)| g.defs[d as usize].qual.clone()).collect();
+                if near.is_empty() {
+                    bail!("no symbol named {symbol:?} (try `grepum find <words>`)");
+                }
+                bail!("no symbol named {symbol:?}; did you mean:\n  {}", near.join("\n  "));
+            }
             let hops = query::walk(g, &idx, &starts, depth, reverse);
             if cli.json {
                 print_json(&serde_json::json!({
@@ -521,7 +527,13 @@ fn main() -> Result<()> {
                     println!("{}{arrow} {n}  {at}{mark}", "  ".repeat(h.depth as usize));
                 }
                 if hops.is_empty() {
-                    println!("  (no {})", if reverse { "callers" } else { "callees" });
+                    println!("  (no {} found)", if reverse { "callers" } else { "callees" });
+                    if reverse {
+                        // A call graph can miss callers (receivers it can't type, macros,
+                        // reflection, data-driven dispatch). Don't let this read as "dead code".
+                        let name = g.defs[starts[0] as usize].name.as_str();
+                        println!("  note: not proof it's unused; confirm with a text search, e.g. `rg -w {name}`");
+                    }
                 }
             }
         }

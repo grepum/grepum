@@ -47,3 +47,8 @@ one line and fall back to Grep/Read.
 - Quote code only when a few lines settle the question.
 - End with any blind spots that could change the answer: dynamic dispatch,
   reflection, Blueprints, external callers. Leave this out if there are none.
+
+Treat "(no callers found)" as "none that grepum could prove", not as dead code:
+confirm with `rg -w <name>` before saying something is unused. Iteration by
+type (`TActorIterator<T>`), shared data and config/asset files are invisible
+to the call graph; search those directly.
