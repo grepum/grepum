@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- **5-day dependency cooldown.** `cargo update` (Cargo 1.100+) skips crate
+  versions younger than 5 days, and the release audit fails if `Cargo.lock`
+  holds one. clap and regex were pinned back to their previous releases
+  (4.6.7, 1.13.1); 0.2.1 had shipped versions 2-3 days old.
+
 ## 0.2.1
 
 - **C++: calls through members used without `this->` now resolve** (the

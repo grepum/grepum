@@ -1,0 +1,6 @@
+# Dependency cooldown (Cargo 1.100+): `cargo update` and new resolves ignore
+# registry versions published less than this long ago, so a compromised
+# release has time to be caught and yanked before it can land here.
+# .github/scripts/crate-age.py enforces the same window on Cargo.lock in CI.
+[registry]
+global-min-publish-age = "5 days"

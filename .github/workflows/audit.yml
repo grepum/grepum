@@ -1,14 +1,15 @@
-# Dependency audit: RustSec advisories, licenses, banned crates and sources,
-# per deny.toml. Runs on dependency changes, weekly (new advisories appear
+# Dependency audit: RustSec advisories, licenses, banned crates and sources
+# per deny.toml, plus the dependency cooldown (no crates.io version younger
+# than .cargo/config.toml's min-publish-age may be locked). Runs on dependency changes, weekly (new advisories appear
 # without any change here), and as a required step of every release.
 name: Audit
 
 on:
   push:
     branches: [main]
-    paths: [Cargo.toml, Cargo.lock, deny.toml, .github/workflows/audit.yml]
+    paths: [Cargo.toml, Cargo.lock, deny.toml, .cargo/config.toml, .github/scripts/crate-age.py, .github/workflows/audit.yml]
   pull_request:
-    paths: [Cargo.toml, Cargo.lock, deny.toml, .github/workflows/audit.yml]
+    paths: [Cargo.toml, Cargo.lock, deny.toml, .cargo/config.toml, .github/scripts/crate-age.py, .github/workflows/audit.yml]
   schedule:
     - cron: "17 6 * * 1"
   workflow_dispatch:
@@ -27,3 +28,10 @@ jobs:
         with:
           command: check
           arguments: --all-features
+
+  crate-age:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Locked crates are past the cooldown
+        run: python3 .github/scripts/crate-age.py
