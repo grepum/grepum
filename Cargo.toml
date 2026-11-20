@@ -4,6 +4,12 @@ version = "0.1.0"
 edition = "2021"
 license = "MIT"
 description = "A code graph woven into git: content-addressed, shared across worktrees, queryable at any revision."
+repository = "https://github.com/grepum/grepum"
+homepage = "https://github.com/grepum/grepum"
+readme = "README.md"
+keywords = ["git", "code-graph", "tree-sitter", "worktree", "claude"]
+categories = ["command-line-utilities", "development-tools"]
+include = ["/src", "/integrations", "/Cargo.toml", "/Cargo.lock", "/README.md", "/LICENSE"]
 
 [[bin]]
 name = "grepum"
@@ -28,3 +34,8 @@ tree-sitter-typescript = "0.23"
 [profile.release]
 lto = "thin"
 codegen-units = 4
+
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
+lto = "thin"

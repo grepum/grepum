@@ -1,28 +1,32 @@
 #!/bin/sh
 # grepum installer.
 #
-#   ./install.sh                         build + install, then ask about Claude Code
+#   curl -fsSL https://raw.githubusercontent.com/grepum/grepum/main/install.sh | sh
+#   ./install.sh                         install the latest release, then ask about Claude Code
 #   ./install.sh --claude user           also install the Claude Code skill/agent/hook for all projects
 #   ./install.sh --claude project        ...or just for the git repo you're in (commit .claude/ to share)
 #   ./install.sh --git-hooks             also keep the graph warm via git hooks in the current repo
-#   ./install.sh --prefix ~/.local       install the binary to ~/.local/bin instead of ~/.cargo/bin
+#   ./install.sh --prefix ~/.local       install the binary to ~/.local/bin (the default)
+#   ./install.sh --from-source           build with cargo from this checkout instead of downloading
 #   ./install.sh --uninstall [--claude ...] [--git-hooks]
 #
-# Nothing outside the chosen locations is modified; shell profiles are never edited.
+# Prebuilt binaries come from GitHub Releases (macOS, Linux, Windows; x86_64 and arm64).
 set -eu
 
-SRC_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+REPO=grepum/grepum
+SRC_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" 2>/dev/null && pwd || pwd)
 CLAUDE=""
 GIT_HOOKS=0
 PREFIX=""
 UNINSTALL=0
 YES=0
+FROM_SOURCE=0
 
 say() { printf '%s\n' "$*"; }
 die() { printf 'error: %s\n' "$*" >&2; exit 1; }
 
 usage() {
-    sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'
     exit 0
 }
 
@@ -33,6 +37,7 @@ while [ $# -gt 0 ]; do
         --git-hooks) GIT_HOOKS=1; shift ;;
         --prefix) [ $# -ge 2 ] || die "--prefix needs a directory"; PREFIX=$2; shift 2 ;;
         --prefix=*) PREFIX=${1#*=}; shift ;;
+        --from-source) FROM_SOURCE=1; shift ;;
         --uninstall) UNINSTALL=1; shift ;;
         -y|--yes) YES=1; shift ;;
         -h|--help) usage ;;
@@ -41,12 +46,13 @@ while [ $# -gt 0 ]; do
 done
 case "$CLAUDE" in ""|user|project|none) ;; *) die "--claude must be user, project or none" ;; esac
 
+CARGO_BIN="${CARGO_HOME:-$HOME/.cargo}/bin"
 if [ -n "$PREFIX" ]; then
     BIN_DIR="$PREFIX/bin"
-    ROOT_ARG="--root $PREFIX"
+elif [ "$FROM_SOURCE" = 1 ]; then
+    BIN_DIR="$CARGO_BIN"
 else
-    BIN_DIR="${CARGO_HOME:-$HOME/.cargo}/bin"
-    ROOT_ARG=""
+    BIN_DIR="${XDG_BIN_HOME:-$HOME/.local/bin}"
 fi
 BIN="$BIN_DIR/grepum"
 
@@ -74,9 +80,13 @@ if [ "$UNINSTALL" = 1 ]; then
         esac
         if [ "$GIT_HOOKS" = 1 ] && in_git_repo; then "$BIN" uninstall git-hooks; fi
     fi
-    if command -v cargo >/dev/null 2>&1; then
-        # shellcheck disable=SC2086
-        cargo uninstall grepum $ROOT_ARG 2>/dev/null && say "removed $BIN" || say "grepum binary was not installed via cargo at $BIN_DIR"
+    if [ -x "$BIN" ] && [ "$BIN_DIR" != "$CARGO_BIN" ]; then
+        rm -f "$BIN" && say "removed $BIN"
+        rm -rf "${XDG_CONFIG_HOME:-$HOME/.config}/grepum"   # install receipt
+    elif command -v cargo >/dev/null 2>&1 && cargo uninstall grepum >/dev/null 2>&1; then
+        say "removed $CARGO_BIN/grepum"
+    else
+        say "no grepum binary found at $BIN"
     fi
     say "Per-repository caches live in <repo>/.git/grepum; delete them with 'grepum clear' or rm -rf."
     exit 0
@@ -84,14 +94,26 @@ fi
 
 # ---------------------------------------------------------------- install
 command -v git >/dev/null 2>&1 || die "git is required"
-if ! command -v cargo >/dev/null 2>&1; then
-    die "Rust's cargo is required to build grepum. Install it from https://rustup.rs, then re-run this script."
-fi
-[ -f "$SRC_DIR/Cargo.toml" ] || die "run this script from the grepum source checkout"
 
-say "Building and installing grepum into $BIN_DIR ..."
-# shellcheck disable=SC2086
-cargo install --quiet --locked --force --path "$SRC_DIR" $ROOT_ARG
+if [ "$FROM_SOURCE" = 1 ]; then
+    command -v cargo >/dev/null 2>&1 || die "--from-source needs Rust's cargo (https://rustup.rs)"
+    [ -f "$SRC_DIR/Cargo.toml" ] || die "--from-source must be run from a grepum source checkout"
+    say "Building and installing grepum into $BIN_DIR ..."
+    if [ -n "$PREFIX" ]; then
+        cargo install --quiet --locked --force --path "$SRC_DIR" --root "$PREFIX"
+    else
+        cargo install --quiet --locked --force --path "$SRC_DIR"
+    fi
+else
+    command -v curl >/dev/null 2>&1 || die "curl is required (or use --from-source)"
+    say "Downloading the latest grepum release into $BIN_DIR ..."
+    mkdir -p "$BIN_DIR"
+    TMP=$(mktemp)
+    trap 'rm -f "$TMP"' EXIT
+    curl --proto '=https' --tlsv1.2 -fLsS -o "$TMP" "https://github.com/$REPO/releases/latest/download/grepum-installer.sh" \
+        || die "download failed; build from source instead: git clone https://github.com/$REPO && cd grepum && ./install.sh --from-source"
+    GREPUM_INSTALL_DIR="$BIN_DIR" GREPUM_NO_MODIFY_PATH=1 sh "$TMP" --quiet || die "the release installer failed"
+fi
 "$BIN" --version >/dev/null 2>&1 || die "install finished but $BIN does not run"
 say "  installed $("$BIN" --version)"
 

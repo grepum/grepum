@@ -7,6 +7,7 @@ mod query;
 mod snapshot;
 mod store;
 mod unreal;
+mod upgrade;
 
 use anyhow::{bail, Result};
 use clap::{Parser, Subcommand};
@@ -109,6 +110,15 @@ enum Cmd {
     },
     /// Delete all cached data for this repository.
     Clear,
+    /// Update grepum to the latest release (for installs made by the release installer).
+    Upgrade {
+        /// Only report whether a newer release exists.
+        #[arg(long)]
+        check: bool,
+        /// Reinstall even when already up to date.
+        #[arg(long)]
+        force: bool,
+    },
     /// Print the facts extracted from one file (no git needed). For debugging extractors.
     #[command(hide = true)]
     Facts { file: PathBuf },
@@ -185,6 +195,7 @@ fn main() -> Result<()> {
         None => std::env::current_dir()?,
     };
     match cli.cmd {
+        Cmd::Upgrade { check, force } => return upgrade::run(&upgrade::Options { check, force }),
         Cmd::Install { target: Target::Claude, scope, force, dry_run } => {
             return install::install_claude(&cwd, &install::Options { scope, force, dry_run });
         }
@@ -336,7 +347,7 @@ fn main() -> Result<()> {
             println!("{}", serde_json::to_string(&query::export(&s.graph))?);
         }
         Cmd::Hooks { action } => hooks(&repo, action == "install")?,
-        Cmd::Facts { .. } => unreachable!(),
+        Cmd::Facts { .. } | Cmd::Upgrade { .. } => unreachable!(),
         Cmd::Install { target, .. } | Cmd::Uninstall { target, .. } => {
             debug_assert!(target == Target::GitHooks);
             hooks(&repo, matches!(cli.cmd, Cmd::Install { .. }))?
