@@ -35,6 +35,10 @@ impl Language for Python {
         visit(w, n)
     }
 
+    fn wrapper_kinds(&self) -> &'static [&'static str] {
+        &["decorated_definition"]
+    }
+
     fn rules(&self) -> &'static Rules {
         &RULES
     }

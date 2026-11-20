@@ -1,7 +1,16 @@
 # Changelog
 
-## Unreleased
+## 0.4.0
 
+- **`grepum show <symbol>`** prints a definition's source, exactly as far as
+  its syntax reaches (braces, indentation), with what belongs to it: doc
+  comments, attributes, decorators, `template<...>`, Unreal `UFUNCTION(...)`.
+  A C++ prototype shows its out-of-line body. `show -` reads targets from
+  stdin: any `path:line` (grepum's own output, `rg -n`, compiler errors)
+  names the function around that line, so `grepum callers X | grepum show -`
+  prints every caller. `--callees` adds what it calls, `--rev` reads a commit,
+  `--json` for tools. Definitions over `--max-lines` (200) keep their
+  signature, start and end.
 - **Each language is a module behind one interface** (`src/lang/`): its
   syntax handling, its module resolution (imports, includes, packages) and
   its resolution rules as data. The extractor and resolver no longer branch

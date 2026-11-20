@@ -100,6 +100,10 @@ impl Language for Cpp {
         tmpl.child_by_field_name("arguments").and_then(|a| w.type_name(a))
     }
 
+    fn wrapper_kinds(&self) -> &'static [&'static str] {
+        &["template_declaration"]
+    }
+
     fn rules(&self) -> &'static Rules {
         &RULES
     }

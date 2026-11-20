@@ -44,6 +44,8 @@ grepum index                     # graph of this worktree (incl. uncommitted edi
 grepum find order service        # ranked symbol search
 grepum callers OrderService.get  # who calls it (--depth N for transitive)
 grepum callees run_order
+grepum show OrderService.get     # its source: exactly the function, with doc comment/decorators
+grepum callers OrderService.get | grepum show -   # ...of every caller (any `path:line` input works)
 grepum context "checkout payment"   # compact neighbourhood, sized for an agent prompt
 grepum diff main                 # symbols + call edges added/removed vs main
 grepum --rev v1.2 callers save   # query any commit, no checkout needed

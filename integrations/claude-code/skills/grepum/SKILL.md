@@ -16,6 +16,7 @@ including uncommitted edits**. There is no index step to remember.
 | Where is something? | `grepum find <words>`: ranked; `order service`, `apply damage` |
 | Who calls it? | `grepum callers <Symbol>` (`--depth 3` for transitive impact) |
 | What does it call? | `grepum callees <Symbol>` |
+| Read its code | `grepum show <Symbol>`: exactly the function's body plus its doc comment and decorators; `--callees` adds what it calls; `grepum callers X \| grepum show -` reads every caller |
 | Orient on a feature | `grepum context <words>`: matches plus 1-hop callers and callees |
 | What did this branch change? | `grepum diff main`: symbols and call edges added or removed |
 | Same question on another branch/commit | add `--rev <rev>` to any command; no checkout needed |
@@ -30,8 +31,10 @@ output.
 
 1. Start with `find` or `context` to locate the code. Don't grep for
    identifiers the graph can resolve.
-2. Read only the line ranges the graph gave you (`file:line`, `context` also
-   prints `start-end`).
+2. Read the code with `grepum show <Symbol>` (or pipe `find`/`callers`
+   output into `grepum show -`) instead of opening whole files. Long
+   functions are cut to their start and end; `--max-lines 0` shows all.
+   `rg -n <pattern> . | grepum show -` shows the functions around text matches.
 3. Before changing a function's signature or behaviour, run
    `grepum callers <Symbol> --depth 2` and check every caller you'll affect.
 4. After your edits, `grepum diff HEAD` shows what you changed structurally:

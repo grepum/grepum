@@ -62,6 +62,14 @@ impl Language for Js {
         visit(w, n)
     }
 
+    fn wrapper_kinds(&self) -> &'static [&'static str] {
+        &["export_statement", "lexical_declaration", "variable_declaration"]
+    }
+
+    fn leading_kinds(&self) -> &'static [&'static str] {
+        &["comment", "decorator"]
+    }
+
     fn rules(&self) -> &'static Rules {
         &RULES
     }

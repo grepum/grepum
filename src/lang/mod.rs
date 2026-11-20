@@ -81,6 +81,18 @@ pub trait Language: Sync {
     /// Module index over the snapshot's files (only this language's are relevant).
     fn modules(&self, files: &[GFile], project: &[(String, Vec<u8>)]) -> Box<dyn Modules>;
 
+    /// Syntax nodes that wrap a definition and belong to it when showing its
+    /// source: Python decorators, C++ `template<...>`, JS `export const`.
+    fn wrapper_kinds(&self) -> &'static [&'static str] {
+        &[]
+    }
+
+    /// Sibling nodes directly above a definition that belong to it: doc
+    /// comments, attributes, decorators.
+    fn leading_kinds(&self) -> &'static [&'static str] {
+        &["comment"]
+    }
+
     /// Name and qualified name of the definition a declaration stands for,
     /// when [`Rules::link_declarations`] is set.
     fn definition_key(&self, decl: &crate::graph::GDef) -> (String, String) {

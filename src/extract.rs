@@ -20,15 +20,7 @@ pub fn extract(lang: Lang, raw: &[u8]) -> FileFacts {
         None => (None, HashMap::new(), vec![]),
     };
     let src: &[u8] = rewritten.as_deref().unwrap_or(raw);
-    let tree = PARSERS.with(|p| {
-        let mut map = p.borrow_mut();
-        let parser = map.entry(lang).or_insert_with(|| {
-            let mut parser = Parser::new();
-            parser.set_language(&support.grammar(lang)).expect("grammar ABI mismatch");
-            parser
-        });
-        parser.parse(src, None)
-    });
+    let tree = parse_with(lang, src);
     let lines = src.iter().filter(|b| **b == b'\n').count() as u32 + 1;
     let mut w = Walker {
         support,
@@ -44,6 +36,26 @@ pub fn extract(lang: Lang, raw: &[u8]) -> FileFacts {
     }
     w.facts.defs.extend(extra_defs);
     w.facts
+}
+
+fn parse_with(lang: Lang, src: &[u8]) -> Option<tree_sitter::Tree> {
+    PARSERS.with(|p| {
+        let mut map = p.borrow_mut();
+        let parser = map.entry(lang).or_insert_with(|| {
+            let mut parser = Parser::new();
+            parser.set_language(&lang::support(lang).grammar(lang)).expect("grammar ABI mismatch");
+            parser
+        });
+        parser.parse(src, None)
+    })
+}
+
+/// Parse a file the way extraction does: the tree, and the source it was
+/// parsed from when the language rewrote it first (same byte offsets and lines).
+pub fn parse(lang: Lang, raw: &[u8]) -> (Option<tree_sitter::Tree>, Option<Vec<u8>>) {
+    let rewritten = lang::support(lang).preprocess(raw).map(|p| p.src);
+    let tree = parse_with(lang, rewritten.as_deref().unwrap_or(raw));
+    (tree, rewritten)
 }
 
 /// FNV-1a over the non-whitespace bytes, so reformatting isn't a change.

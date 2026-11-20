@@ -32,6 +32,10 @@ impl Language for Rust {
         visit(w, n)
     }
 
+    fn leading_kinds(&self) -> &'static [&'static str] {
+        &["line_comment", "block_comment", "attribute_item"]
+    }
+
     fn rules(&self) -> &'static Rules {
         &RULES
     }

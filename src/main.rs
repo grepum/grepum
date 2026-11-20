@@ -8,6 +8,7 @@ mod html;
 mod install;
 mod lang;
 mod query;
+mod show;
 mod snapshot;
 mod store;
 mod upgrade;
@@ -81,6 +82,26 @@ enum Cmd {
         symbol: String,
         #[arg(short, long, default_value_t = 1)]
         depth: u32,
+    },
+    /// Print a definition's source, as far as its syntax reaches, with its doc comment,
+    /// attributes and decorators. `-` reads targets from stdin: any `path:line`
+    /// (grepum output, `rg -n`) names the definition around that line.
+    Show {
+        /// Symbols, `path:line`s, or `-` for stdin.
+        #[arg(required = true)]
+        targets: Vec<String>,
+        /// Longer definitions keep their first and last lines; 0 shows everything.
+        #[arg(long, default_value_t = 200)]
+        max_lines: usize,
+        /// Leave out line numbers.
+        #[arg(short = 'N', long)]
+        no_line_numbers: bool,
+        /// Also show what each definition calls (one level).
+        #[arg(long)]
+        callees: bool,
+        /// Most definitions one name may expand to (overloads, same name in many files).
+        #[arg(short = 'n', long, default_value_t = 10)]
+        limit: usize,
     },
     /// Compact neighbourhood of the best matches, sized for an agent prompt.
     Context {
@@ -413,6 +434,36 @@ fn main() -> Result<()> {
                         println!("  note: not proof it's unused; confirm with a text search, e.g. `rg -w {name}`");
                     }
                 }
+            }
+        }
+        Cmd::Show { targets, max_lines, no_line_numbers, callees, limit } => {
+            let s = snapshot(&repo, &store, rev, false)?;
+            let piped = targets.iter().any(|t| t == "-");
+            let mut args = vec![];
+            for t in targets {
+                if t == "-" {
+                    args.extend(std::io::stdin().lines().map_while(|l| l.ok()).filter(|l| !l.trim().is_empty()));
+                } else {
+                    args.push(t);
+                }
+            }
+            let toplevel = repo.toplevel.to_string_lossy().replace('\\', "/");
+            let (picked, missing) = show::targets(&s.graph, &toplevel, &args, limit);
+            if !piped {
+                // Piped text is mostly lines without a location; skipping those is expected.
+                for m in &missing {
+                    eprintln!("grepum: no definition for {m:?}");
+                }
+            }
+            if picked.defs.is_empty() {
+                bail!("nothing to show (try `grepum find <words>`)");
+            }
+            let opts = show::Options { max_lines, line_numbers: !no_line_numbers, callees };
+            let mut src = show::Source::new(&repo, rev);
+            if cli.json {
+                print_json(&show::json(&s.graph, &mut src, &picked, &opts));
+            } else {
+                show::print(&s.graph, &mut src, &picked, &opts);
             }
         }
         Cmd::Context { query, symbols } => {
