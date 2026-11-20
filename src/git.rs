@@ -284,6 +284,17 @@ impl Repo {
         Ok(out.lines().map(|s| s.to_string()).collect())
     }
 
+    /// Whether git ignores `path` (via .gitignore and friends). Tracked
+    /// paths are never ignored.
+    pub fn is_ignored(&self, path: &Path) -> bool {
+        self.cmd()
+            .args(["check-ignore", "-q"])
+            .arg(path)
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+    }
+
     pub fn hooks_dir(&self) -> Result<PathBuf> {
         let p = run_str(self.cmd().args(["rev-parse", "--path-format=absolute", "--git-path", "hooks"]))?;
         Ok(native(&p))
