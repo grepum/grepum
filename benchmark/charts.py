@@ -1,20 +1,21 @@
 #!/usr/bin/env python3
-"""Render the README benchmark charts from examples/results/latest.json.
+"""Render the README benchmark charts from benchmark/results/{synthetic,real}.json.
 
-    python3 examples/charts.py            # writes docs/bench-*-{light,dark}.svg
+    python3 benchmark/charts.py      # writes benchmark/charts/*-{light,dark}.svg
 
 Static SVG (GitHub READMEs show images, so there is no hover layer); every bar
-carries its value at the tip, and the full numbers are in results/latest.md.
+carries its value at the tip, and the full numbers are in results/<set>.md.
 """
 import json
 import pathlib
 from html import escape
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-RESULTS = ROOT / "examples" / "results" / "latest.json"
-OUT = ROOT / "docs"
+RESULTS = ROOT / "benchmark" / "results"
+OUT = ROOT / "benchmark" / "charts"
 
-PROJECTS = [("shopfront", "TypeScript"), ("datapipe", "Python"), ("arena", "Unreal Engine 5 C++")]
+SYNTHETIC = [("shopfront", "TypeScript"), ("datapipe", "Python"), ("arena", "UE5 C++")]
+REAL = [(r["name"], r["lang"]) for r in json.loads((ROOT / "benchmark" / "real_repos.json").read_text())["repos"]]
 TOOLS = [("grepum", "grepum"), ("graphify", "graphify")]
 
 THEMES = {
@@ -83,8 +84,8 @@ def header(svg, title, subtitle):
     return 104
 
 
-def panel(svg, x, y, width, title, values, fmt, note):
-    """One small multiple: 3 projects × (grepum, graphify) horizontal bars on a shared scale.
+def panel(svg, x, y, width, title, projects, values, fmt, note):
+    """One small multiple: projects × (grepum, graphify) horizontal bars on a shared scale.
 
     values[p] = (grepum, graphify); note(p) -> annotation after grepum's value, or None.
     """
@@ -95,10 +96,10 @@ def panel(svg, x, y, width, title, values, fmt, note):
     span = width - label_w - 70
     vmax = max(v for pair in values.values() for v in pair)
     top = y + 30
-    for i, (proj, lang) in enumerate(PROJECTS):
+    for i, (proj, lang) in enumerate(projects):
         ry = top + i * ROW
         svg.text(x, ry + 11, proj, size=13)
-        svg.text(x, ry + 26, lang if len(lang) < 14 else "UE5 C++", size=11, fill="muted")
+        svg.text(x, ry + 26, lang, size=11, fill="muted")
         for j, v in enumerate(values[proj]):
             by = ry + 2 + j * (BAR + PAIR_GAP)
             w = span * v / vmax if vmax else 0
@@ -109,16 +110,15 @@ def panel(svg, x, y, width, title, values, fmt, note):
                     if extra else "")
             svg.raw(f'<text x="{x0 + max(w, 2) + 6:.1f}" y="{by + 9.5:.1f}" font-size="12" '
                     f'fill="{svg.t["ink2"]}">{escape(label)}{tail}</text>')
-    bottom = top + len(PROJECTS) * ROW - 14
+    bottom = top + len(projects) * ROW - 14
     svg.raw(f'<line x1="{x0}" y1="{top - 4}" x2="{x0}" y2="{bottom}" stroke="{svg.t["baseline"]}" stroke-width="1"/>')
     return bottom + 10
 
 
-def speed_chart(data, theme):
+def speed_chart(data, theme, projects, title, subtitle):
     W = 840
     svg = Svg(W, theme)
-    y = header(svg, "grepum vs graphify: speed and disk",
-               "Generated ~200-file projects, median of repeated runs on an Apple M2 Max. Shorter is better.")
+    y = header(svg, title, subtitle)
     col_w = (W - 48 - 32) / 2
     panels = [
         ("Cold index", "cold", fmt_time, "faster"),
@@ -131,38 +131,63 @@ def speed_chart(data, theme):
         px = 24 + (k % 2) * (col_w + 32)
         if k % 2 == 0:
             y = row_bottom + (16 if k else 0)
-        values = {p: (data[p]["grepum"][key], data[p]["graphify"][key]) for p, _ in PROJECTS}
-        b = panel(svg, px, y, col_w, title, values, fmt,
+        values = {p: (data[p]["grepum"][key], data[p]["graphify"][key]) for p, _ in projects}
+        b = panel(svg, px, y, col_w, title, projects, values, fmt,
                   lambda p, v=values, w=word: f"{fmt_ratio(v[p][1] / v[p][0])} {w}")
         row_bottom = max(row_bottom, b)
     svg.h = int(row_bottom + 14)
-    return svg.render("grepum vs graphify: indexing time and disk use")
+    return svg.render(title)
 
 
-def accuracy_chart(data, theme):
+def accuracy_chart(data, theme, projects=SYNTHETIC):
     W = 840
     svg = Svg(W, theme)
-    y = header(svg, "grepum vs graphify: call-graph accuracy",
+    y = header(svg, "Synthetic projects: call-graph accuracy",
                "Call edges checked against the call graph recorded by the project generator. Longer is better.")
     col_w = (W - 48 - 32) / 2
     bottom = y
     for k, (title, key) in enumerate([("Recall: real calls found", "recall"),
                                        ("Precision: reported calls that are real", "precision")]):
         px = 24 + k * (col_w + 32)
-        values = {p: tuple(data[p][t]["accuracy"][key] for t, _ in TOOLS) for p, _ in PROJECTS}
-        b = panel(svg, px, y, col_w, title, values, lambda v: f"{v * 100:.1f}%", lambda p: None)
+        values = {p: tuple(data[p][t]["accuracy"][key] for t, _ in TOOLS) for p, _ in projects}
+        b = panel(svg, px, y, col_w, title, projects, values, lambda v: f"{v * 100:.1f}%", lambda p: None)
         bottom = max(bottom, b)
     svg.h = int(bottom + 14)
     return svg.render("grepum vs graphify: call-edge recall and precision")
 
 
+def latest_meta(set_name):
+    runs = sorted((RESULTS / "runs").glob(f"*-{set_name}.json"))
+    return json.loads(runs[-1].read_text())["meta"] if runs else {}
+
+
+def machine(meta):
+    return meta.get("machine", "").split(",")[0] or "this machine"
+
+
 def main():
-    data = json.loads(RESULTS.read_text())
-    OUT.mkdir(exist_ok=True)
-    for theme in THEMES:
-        (OUT / f"bench-speed-{theme}.svg").write_text(speed_chart(data, theme))
-        (OUT / f"bench-accuracy-{theme}.svg").write_text(accuracy_chart(data, theme))
-    print(f"wrote {len(THEMES) * 2} charts to {OUT.relative_to(ROOT)}/")
+    OUT.mkdir(parents=True, exist_ok=True)
+    written = 0
+    syn_path, real_path = RESULTS / "synthetic.json", RESULTS / "real.json"
+    if syn_path.exists():
+        data, meta = json.loads(syn_path.read_text()), latest_meta("synthetic")
+        sub = (f"Generated ~200-file projects, median of {meta.get('reps', 3)} runs on {machine(meta)}. "
+               "Shorter is better.")
+        for theme in THEMES:
+            (OUT / f"synthetic-speed-{theme}.svg").write_text(
+                speed_chart(data, theme, SYNTHETIC, "Synthetic projects: speed and disk", sub))
+            (OUT / f"synthetic-accuracy-{theme}.svg").write_text(accuracy_chart(data, theme))
+            written += 2
+    if real_path.exists():
+        data, meta = json.loads(real_path.read_text()), latest_meta("real")
+        projects = [p for p in REAL if p[0] in data]
+        sub = (f"Open-source repos at pinned tags, median of {meta.get('reps', 3)} runs on {machine(meta)}. "
+               "Shorter is better.")
+        for theme in THEMES:
+            (OUT / f"real-speed-{theme}.svg").write_text(
+                speed_chart(data, theme, projects, "Real repositories: speed and disk", sub))
+            written += 1
+    print(f"wrote {written} charts to {OUT.relative_to(ROOT)}/")
 
 
 if __name__ == "__main__":

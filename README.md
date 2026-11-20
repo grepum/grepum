@@ -105,29 +105,31 @@ plugin in `integrations/claude-code/`; see its README.
 ## Benchmarks
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/bench-speed-dark.svg">
-  <img alt="grepum vs graphify: grepum indexes 18-25x faster cold, 30-57x faster after an edit, 32-47x faster across 4 new worktrees, and uses 26-50x less disk" src="docs/bench-speed-light.svg" width="840">
+  <source media="(prefers-color-scheme: dark)" srcset="benchmark/charts/bench-speed-dark.svg">
+  <img alt="grepum vs graphify: grepum indexes 18-25x faster cold, 30-57x faster after an edit, 32-47x faster across 4 new worktrees, and uses 26-50x less disk" src="benchmark/charts/bench-speed-light.svg" width="840">
 </picture>
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/bench-accuracy-dark.svg">
-  <img alt="Call-edge recall: grepum 99.3-100%, graphify 40.5-92.2%. Precision: grepum 100% on all three projects, graphify 100%, 100% and 86.6%" src="docs/bench-accuracy-light.svg" width="840">
+  <source media="(prefers-color-scheme: dark)" srcset="benchmark/charts/bench-accuracy-dark.svg">
+  <img alt="Call-edge recall: grepum 99.3-100%, graphify 40.5-92.2%. Precision: grepum 100% on all three projects, graphify 100%, 100% and 86.6%" src="benchmark/charts/bench-accuracy-light.svg" width="840">
 </picture>
 
-`examples/` has a generator for three fake projects (TypeScript, Python,
+`benchmark/` has a generator for three fake projects (TypeScript, Python,
 Unreal Engine 5 C++) with a known call graph, and
 a harness that runs grepum and [graphify](https://github.com/Graphify-Labs/graphify)
 through the same worktree workflow:
 
 ```
 cargo build --release
-python3 examples/generate.py
-python3 examples/bench.py --graphify $(which graphify)
-python3 examples/charts.py      # redraws the charts above from the results
+python3 benchmark/generate.py   # writes the projects + ground truth (not committed)
+python3 benchmark/bench.py --graphify $(which graphify)
+python3 benchmark/charts.py     # redraws the charts above from the results
 ```
 
 Full numbers, including warm re-index, query latency and hard cases, are in
-[`examples/results/latest.md`](examples/results/latest.md).
+[`benchmark/results/latest.md`](benchmark/results/latest.md); every run is
+also kept in [`benchmark/results/runs/`](benchmark/results/runs/) with the
+machine, commit and tool versions.
 
 Caveat: the same author wrote the generator and the resolver, and the
 resolver was tuned against these projects. They use common idioms, but treat

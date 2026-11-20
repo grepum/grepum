@@ -1,3 +1,7 @@
 /target
 __pycache__/
 .DS_Store
+# generated or cloned by the benchmark scripts; never committed
+/benchmark/projects/
+/benchmark/truth/
+/benchmark/repos/

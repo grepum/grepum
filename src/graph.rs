@@ -988,6 +988,17 @@ impl<'a> Resolver<'a> {
         out
     }
 
+    /// Overloads share a qualified name, and argument types aren't modelled, so a
+    /// call is linked to one of them (the first) rather than to all of them, which
+    /// would multiply edges and hub counts.
+    fn one_per_overload_set(&self, targets: Vec<u32>) -> Vec<u32> {
+        if targets.len() < 2 {
+            return targets;
+        }
+        let mut seen: HashSet<&str> = HashSet::new();
+        targets.into_iter().filter(|t| seen.insert(self.defs[*t as usize].qual.as_str())).collect()
+    }
+
     fn resolve_inherits(&mut self) {
         let mut bases: HashMap<u32, Vec<u32>> = HashMap::new();
         for (fi, inp) in self.inputs.iter().enumerate() {
@@ -1037,7 +1048,7 @@ impl<'a> Resolver<'a> {
             }
             let from_def = r.scope.map(|s| self.global_def(fi, s));
             let targets = if facts.lang == Lang::Cpp { self.prefer_definitions(targets) } else { targets };
-            for t in targets {
+            for t in self.one_per_overload_set(targets) {
                 if Some(t) == from_def && r.kind == RefKind::New {
                     continue;
                 }

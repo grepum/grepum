@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """Generate the two fake benchmark projects plus their ground-truth call graphs.
 
-    python3 examples/generate.py [--entities-ts 40] [--entities-py 60]
+    python3 benchmark/generate.py [--entities-ts 40] [--entities-py 60]
 
 Writes:
-    examples/projects/shopfront/     TypeScript service (domain/repository/service/routes layers)
-    examples/projects/datapipe/      Python data pipeline (stages/connectors/models/pipelines)
-    examples/projects/arena/         Unreal Engine 5 style C++ game module (Public/Private, UCLASS, RPCs)
-    examples/truth/<project>.json    every definition and every call edge, with line numbers
+    benchmark/projects/shopfront/     TypeScript service (domain/repository/service/routes layers)
+    benchmark/projects/datapipe/      Python data pipeline (stages/connectors/models/pipelines)
+    benchmark/projects/arena/         Unreal Engine 5 style C++ game module (Public/Private, UCLASS, RPCs)
+    benchmark/truth/<project>.json    every definition and every call edge, with line numbers
 
 The code uses everyday idioms: named/namespace/barrel imports, relative imports,
 constructor-injected dependencies, inheritance, factories with return types,

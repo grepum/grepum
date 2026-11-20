@@ -1,0 +1,20 @@
+{
+ "_comment": "Open-source repos cloned (shallow, pinned tag) into benchmark/repos/ at run time. Nothing from them is committed here. No ground truth exists, so these measure speed and disk only; 'edit' is appended to edit_file to create the feature branches and dirty edits.",
+ "repos": [
+  {"name": "flask", "lang": "Python", "url": "https://github.com/pallets/flask.git", "rev": "3.1.3",
+   "edit_file": "src/flask/helpers.py", "query": "Scaffold.route",
+   "edit": "\n\ndef bench_feature_{n}(value):\n    return value * {n}\n"},
+  {"name": "hono", "lang": "TypeScript", "url": "https://github.com/honojs/hono.git", "rev": "v4.13.19",
+   "edit_file": "src/utils/url.ts", "query": "Hono",
+   "edit": "\nexport function benchFeature{n}(x: number): number {{\n  return x * {n}\n}}\n"},
+  {"name": "ripgrep", "lang": "Rust", "url": "https://github.com/BurntSushi/ripgrep.git", "rev": "15.2.0",
+   "edit_file": "crates/searcher/src/lib.rs", "query": "SearcherTester.test",
+   "edit": "\npub fn bench_feature_{n}(x: u32) -> u32 {{\n    x * {n}\n}}\n"},
+  {"name": "fzf", "lang": "Go", "url": "https://github.com/junegunn/fzf.git", "rev": "v0.75.0",
+   "edit_file": "src/util/util.go", "query": "ToChars",
+   "edit": "\nfunc BenchFeature{n}(x int) int {{\n\treturn x * {n}\n}}\n"},
+  {"name": "leveldb", "lang": "C++", "url": "https://github.com/google/leveldb.git", "rev": "1.23",
+   "edit_file": "util/coding.cc", "query": "DBImpl::Write",
+   "edit": "\nint BenchFeature{n}(int x) {{ return x * {n}; }}\n"}
+ ]
+}
