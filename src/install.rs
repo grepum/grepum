@@ -10,6 +10,7 @@
 
 use anyhow::{bail, Context, Result};
 use serde_json::{json, Value};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 const SKILL: &str = include_str!("../integrations/claude-code/skills/grepum/SKILL.md");
@@ -180,18 +181,18 @@ fn put_file(path: &Path, body: &str, opts: &Options) -> Result<FileAction> {
     Ok(action)
 }
 
-pub fn install_claude(cwd: &Path, opts: &Options) -> Result<()> {
+pub fn install_claude(out: &mut impl Write, cwd: &Path, opts: &Options) -> Result<()> {
     let dir = claude_dir(opts.scope, cwd)?;
     let pre = if opts.dry_run { "would " } else { "" };
-    println!("Claude Code ({} scope): {}", if opts.scope == Scope::User { "user" } else { "project" }, dir.display());
+    writeln!(out, "Claude Code ({} scope): {}", if opts.scope == Scope::User { "user" } else { "project" }, dir.display())?;
 
     for (rel, body) in [("skills/grepum/SKILL.md", SKILL), ("agents/code-navigator.md", AGENT)] {
         let path = dir.join(rel);
         match put_file(&path, body, opts)? {
-            FileAction::Created => println!("  {pre}create  {rel}"),
-            FileAction::Updated => println!("  {pre}update  {rel}"),
-            FileAction::Unchanged => println!("  ok      {rel}"),
-            FileAction::SkippedForeign => println!("  skip    {rel}  (exists and wasn't written by grepum; --force to replace)"),
+            FileAction::Created => writeln!(out, "  {pre}create  {rel}")?,
+            FileAction::Updated => writeln!(out, "  {pre}update  {rel}")?,
+            FileAction::Unchanged => writeln!(out, "  ok      {rel}")?,
+            FileAction::SkippedForeign => writeln!(out, "  skip    {rel}  (exists and wasn't written by grepum; --force to replace)")?,
         }
     }
 
@@ -216,25 +217,25 @@ pub fn install_claude(cwd: &Path, opts: &Options) -> Result<()> {
         None => bail!("{}: \"hooks.SessionStart\" is not an array; refusing to modify it", settings_path.display()),
     }
     if settings == before {
-        println!("  ok      settings.json  (SessionStart hook)");
+        writeln!(out, "  ok      settings.json  (SessionStart hook)")?;
     } else {
         let backup = existed && opts.scope == Scope::User;
         write_settings(&settings_path, &settings, backup, opts.dry_run)?;
         let backup = if backup && !opts.dry_run { "; previous version saved as settings.json.grepum.bak" } else { "" };
-        println!("  {pre}{}  settings.json  (SessionStart hook{backup})", if existed { "update" } else { "create" });
+        writeln!(out, "  {pre}{}  settings.json  (SessionStart hook{backup})", if existed { "update" } else { "create" })?;
     }
 
     if opts.scope == Scope::Project {
-        println!("\nCommit .claude/ to share this setup with your team.");
+        writeln!(out, "\nCommit .claude/ to share this setup with your team.")?;
     }
-    println!("Start a new Claude Code session (or /clear) to pick it up.");
+    writeln!(out, "Start a new Claude Code session (or /clear) to pick it up.")?;
     Ok(())
 }
 
-pub fn uninstall_claude(cwd: &Path, opts: &Options) -> Result<()> {
+pub fn uninstall_claude(out: &mut impl Write, cwd: &Path, opts: &Options) -> Result<()> {
     let dir = claude_dir(opts.scope, cwd)?;
     let pre = if opts.dry_run { "would " } else { "" };
-    println!("Claude Code ({} scope): {}", if opts.scope == Scope::User { "user" } else { "project" }, dir.display());
+    writeln!(out, "Claude Code ({} scope): {}", if opts.scope == Scope::User { "user" } else { "project" }, dir.display())?;
     for rel in ["skills/grepum/SKILL.md", "agents/code-navigator.md"] {
         let path = dir.join(rel);
         match std::fs::read_to_string(&path) {
@@ -245,9 +246,9 @@ pub fn uninstall_claude(cwd: &Path, opts: &Options) -> Result<()> {
                         let _ = std::fs::remove_dir(path.parent().unwrap());
                     }
                 }
-                println!("  {pre}remove  {rel}");
+                writeln!(out, "  {pre}remove  {rel}")?;
             }
-            Ok(_) => println!("  skip    {rel}  (not written by grepum; --force to remove)"),
+            Ok(_) => writeln!(out, "  skip    {rel}  (not written by grepum; --force to remove)")?,
             Err(_) => {}
         }
     }
@@ -258,10 +259,10 @@ pub fn uninstall_claude(cwd: &Path, opts: &Options) -> Result<()> {
                 if !opts.dry_run {
                     std::fs::remove_file(&settings_path)?;
                 }
-                println!("  {pre}remove  settings.json  (only held the grepum hook)");
+                writeln!(out, "  {pre}remove  settings.json  (only held the grepum hook)")?;
             } else {
                 write_settings(&settings_path, &settings, opts.scope == Scope::User, opts.dry_run)?;
-                println!("  {pre}update  settings.json  (removed SessionStart hook)");
+                writeln!(out, "  {pre}update  settings.json  (removed SessionStart hook)")?;
             }
         }
     }

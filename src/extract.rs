@@ -476,6 +476,7 @@ impl<'a> Walker<'a> {
                 _ => "?".into(),
             },
             "generic_type" => f("type").map(|t| self.qual_inner(t)).unwrap_or("?".into()),
+            "generic_function" => f("function").map(|t| self.qual_inner(t)).unwrap_or("?".into()),
             // `make()` / `repo.get()` as a receiver: the type is whatever the call returns.
             "call" | "call_expression" => match f("function") {
                 Some(func) => format!("{}()", self.qual_inner(func)),
@@ -583,18 +584,28 @@ impl<'a> Walker<'a> {
                 Some(TypeHint::CallResult { name: name?, qualifier })
             }
             "new_expression" => match v.child_by_field_name("type") {
-                // C++ `new T(...)` names a type; JS `new X()` a constructor expression.
+                // C++ `new T(...)` names a type; JS `new X()` / `new ns.X()` a constructor expression.
                 Some(t) => Some(TypeHint::Named(self.type_name(t)?)),
                 None => {
-                    let (name, _) = self.split_callee(v.child_by_field_name("constructor")?);
-                    Some(TypeHint::Named(name?))
+                    let (name, qualifier) = self.split_callee(v.child_by_field_name("constructor")?);
+                    match qualifier {
+                        Some(q) => Some(TypeHint::CallResult { name: name?, qualifier: Some(q) }),
+                        None => Some(TypeHint::Named(name?)),
+                    }
                 }
             },
             "struct_expression" => Some(TypeHint::Named(self.type_name(v.child_by_field_name("name")?)?)),
             "composite_literal" => Some(TypeHint::Named(self.type_name(v.child_by_field_name("type")?)?)),
             "await" | "await_expression" | "unary_expression" | "reference_expression" | "parenthesized_expression"
-            | "try_expression" | "as_expression" => children(v).first().and_then(|c| self.value_hint(*c)),
+            | "try_expression" | "as_expression" | "satisfies_expression" | "non_null_expression" => {
+                children(v).first().and_then(|c| self.value_hint(*c))
+            }
             "identifier" => Some(TypeHint::Alias(self.text(v).to_string())),
+            "member_expression" | "attribute" | "field_expression" | "selector_expression"
+            | "scoped_identifier" | "qualified_identifier" => {
+                let q = self.qual(v);
+                (q != "?").then_some(TypeHint::Alias(q))
+            }
             "list" | "dictionary" | "set" | "tuple" | "string" | "integer" | "float" | "true" | "false"
             | "list_comprehension" | "dictionary_comprehension" | "array" | "object" | "number"
             | "template_string" | "concatenated_string" => Some(TypeHint::Named(format!("<{}>", v.kind()))),

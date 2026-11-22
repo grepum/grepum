@@ -45,20 +45,48 @@ impl Language for Rust {
     }
 
     fn modules(&self, files: &[GFile], _: &[(String, Vec<u8>)]) -> Box<dyn Modules> {
+        // Crate roots: directories holding `lib.rs` or `main.rs`, longest first
+        // so nested crates match their own root (works with or without `src/`).
+        let mut roots: Vec<String> = files
+            .iter()
+            .filter(|f| f.lang == Lang::Rust)
+            .filter_map(|f| {
+                let base = f.path.rsplit('/').next().unwrap_or(&f.path);
+                matches!(base, "lib.rs" | "main.rs").then(|| match f.path.rsplit_once('/') {
+                    Some((dir, _)) => format!("{dir}/"),
+                    None => String::new(),
+                })
+            })
+            .collect();
+        roots.sort_by(|a, b| b.len().cmp(&a.len()).then(a.cmp(b)));
+        roots.dedup();
         // Module path within its crate (`db/pool` for src/db/pool.rs or src/db/pool/mod.rs).
         let mut by_path: HashMap<String, Vec<u32>> = HashMap::new();
         for (fi, f) in files.iter().enumerate().filter(|(_, f)| f.lang == Lang::Rust) {
-            let p = strip_ext(&f.path);
-            let rel = p.rsplit_once("src/").map(|(_, r)| r).unwrap_or(p);
+            let (_, rel) = split_crate_root(&roots, &f.path);
+            let rel = strip_ext(rel);
             let rel = rel.strip_suffix("/mod").unwrap_or(rel);
             let key = if rel == "lib" || rel == "main" { String::new() } else { rel.to_string() };
             by_path.entry(key).or_default().push(fi as u32);
         }
-        Box::new(RustModules { by_path })
+        Box::new(RustModules { roots, by_path })
+    }
+}
+
+fn split_crate_root<'a>(roots: &[String], path: &'a str) -> (&'a str, &'a str) {
+    for r in roots {
+        if let Some(rest) = path.strip_prefix(r.as_str()) {
+            return (&path[..r.len()], rest);
+        }
+    }
+    match path.rsplit_once("src/") {
+        Some((prefix, rest)) => (&path[..prefix.len() + 4], rest),
+        None => ("", path),
     }
 }
 
 struct RustModules {
+    roots: Vec<String>,
     by_path: HashMap<String, Vec<u32>>,
 }
 
@@ -82,8 +110,9 @@ impl Modules for RustModules {
     fn module(&self, files: &[GFile], from: u32, path: &str) -> Option<Vec<u32>> {
         let segs: Vec<&str> = path.split("::").filter(|s| !s.is_empty()).collect();
         let me = &files[from as usize].path;
-        let my_rel = strip_ext(me).rsplit_once("src/").map(|(_, r)| r.to_string()).unwrap_or_default();
-        let my_rel = my_rel.strip_suffix("/mod").unwrap_or(&my_rel).to_string();
+        let (crate_root, my_rel) = split_crate_root(&self.roots, me);
+        let my_rel = strip_ext(my_rel);
+        let my_rel = my_rel.strip_suffix("/mod").unwrap_or(my_rel);
         let mut cur: Vec<String> = match segs.first() {
             Some(&"crate") => vec![],
             Some(&"self") => my_rel.split('/').filter(|s| !s.is_empty() && *s != "lib" && *s != "main").map(String::from).collect(),
@@ -102,7 +131,6 @@ impl Modules for RustModules {
             }
         }
         let found = self.by_path.get(&cur.join("/"))?;
-        let crate_root = me.rsplit_once("src/").map(|(c, _)| c).unwrap_or("");
         let same: Vec<u32> = found.iter().copied().filter(|f| files[*f as usize].path.starts_with(crate_root)).collect();
         Some(if same.is_empty() { found.clone() } else { same })
     }

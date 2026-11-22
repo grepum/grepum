@@ -130,3 +130,160 @@ fn typescript_constructs_resolve_like_tsc() {
     assert!(missing.is_empty() && wrong.is_empty(), "missing:\n  {}\nwrong:\n  {}\nall edges:\n  {}",
         missing.join("\n  "), wrong.join("\n  "), { let mut v: Vec<_> = e.into_iter().collect(); v.sort(); v.join("\n  ") });
 }
+
+#[test]
+fn values_built_from_external_imports_do_not_link_to_local_methods() {
+    let root = std::env::temp_dir().join(format!("grepum-ext-origin-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+
+    // Local classes whose method names are unique in the repository.
+    write(&root, "src/vault.ts", "\
+export class Vault {
+  safeParse<T>(input: string): T {
+    return JSON.parse(input);
+  }
+  load(raw: string) {
+    return this.safeParse(raw);
+  }
+}
+export class Ctx {
+  constructor(public vault: Vault) {}
+}
+");
+    // Re-exported external package and external-derived binding.
+    write(&root, "src/barrel.ts", "\
+export { z } from 'zod';
+export { configSchema } from './config';
+");
+    write(&root, "src/config.ts", "\
+import { z, createSchema } from 'zod';
+import * as ext from 'external-pkg';
+import { Vault, Ctx } from './vault';
+
+export const configSchema = z.object({ port: z.number() });
+const chainedSchema = z.object({ port: z.number() }).strict().optional();
+const extendedSchema = configSchema.extend({ host: z.string() });
+const aliasSchema = configSchema;
+const portSchema = configSchema.shape.port;
+const directSchema = createSchema();
+const extVault = new ext.Vault();
+
+export function parseConfig(input: unknown) { return configSchema.safeParse(input); }
+export function parseInline(input: unknown) { return z.string().safeParse(input); }
+export function parseChained(input: unknown) { return chainedSchema.safeParse(input); }
+export function parseExtended(input: unknown) { return extendedSchema.safeParse(input); }
+export function parseAlias(input: unknown) { return aliasSchema.safeParse(input); }
+export function parseProp(input: unknown) { return portSchema.safeParse(input); }
+export function parseDirect(input: unknown) { return directSchema.safeParse(input); }
+export function parseDirectInline(input: unknown) { return createSchema().safeParse(input); }
+export function parseExtNew(input: unknown) { return extVault.safeParse(input); }
+export function parseLocalConst(input: unknown) {
+  const local = z.object({ port: z.number() });
+  return local.safeParse(input);
+}
+
+export class ConfigLoader {
+  schema = z.object({ port: z.number() });
+  run(input: unknown) { return this.schema.safeParse(input); }
+}
+
+// Positive controls: real local receivers still resolve.
+export function parseRealVault(raw: string) {
+  const v = new Vault();
+  return v.safeParse(raw);
+}
+export function parseViaFieldAlias(ctx: Ctx, raw: string) {
+  const v = ctx.vault;
+  return v.safeParse(raw);
+}
+");
+    write(&root, "src/consumer.ts", "\
+import { z, configSchema } from './barrel';
+
+const fromBarrelZ = z.object({ ok: z.boolean() });
+
+export function viaImportedConst(input: unknown) { return configSchema.safeParse(input); }
+export function viaBarrelExternal(input: unknown) { return fromBarrelZ.safeParse(input); }
+");
+
+    // Python, Go and Rust: same external-origin rule.
+    write(&root, "app/local.py", "\
+class LocalPy:
+    def unique_py_parse(self, x):
+        return x
+");
+    write(&root, "app/use_ext.py", "\
+import ext_pkg
+from ext_pkg import build_schema
+
+schema = ext_pkg.object()
+direct = build_schema()
+
+def py_ext_member(x):
+    return schema.unique_py_parse(x)
+
+def py_ext_direct(x):
+    return direct.unique_py_parse(x)
+");
+    write(&root, "pkg/local.go", "\
+package pkg
+type LocalGo struct{}
+func (l *LocalGo) UniqueGoParse() {}
+");
+    write(&root, "pkg/use_ext.go", "\
+package pkg
+import \"example.com/thirdparty/schema\"
+func GoExt() {
+    s := schema.New()
+    s.UniqueGoParse()
+}
+");
+    write(&root, "src/lib.rs", "\
+use external_crate::Builder;
+pub struct LocalRs;
+impl LocalRs {
+    pub fn unique_rs_parse(&self) {}
+}
+pub fn rs_ext() {
+    let b = Builder::new();
+    b.unique_rs_parse();
+}
+");
+
+    for args in [&["init", "-q"][..], &["add", "-A"], &["-c", "user.name=t", "-c", "user.email=t@e", "commit", "-qm", "init"]] {
+        assert!(Command::new("git").args(args).current_dir(&root).status().unwrap().success());
+    }
+
+    let e = edges(&root);
+    let expected = [
+        ("Vault.load -> Vault.safeParse", "this.safeParse"),
+        ("parseRealVault -> Vault.safeParse", "const v = new Vault()"),
+        ("parseViaFieldAlias -> Vault.safeParse", "const v = ctx.vault"),
+    ];
+    let missing: Vec<String> = expected.iter().filter(|(x, _)| !e.contains(*x)).map(|(x, why)| format!("{x}  ({why})")).collect();
+
+    let forbidden = [
+        ("parseConfig -> Vault.safeParse", "const initialized from external import"),
+        ("parseInline -> Vault.safeParse", "chained call on external import"),
+        ("parseChained -> Vault.safeParse", "chained calls in const initializer"),
+        ("parseExtended -> Vault.safeParse", "derived from external-origin const"),
+        ("parseAlias -> Vault.safeParse", "alias of external-origin const"),
+        ("parseProp -> Vault.safeParse", "property of external-origin const"),
+        ("parseDirect -> Vault.safeParse", "direct call to external imported function"),
+        ("parseDirectInline -> Vault.safeParse", "inline call to external imported function"),
+        ("parseExtNew -> Vault.safeParse", "new ext.Vault() from external namespace"),
+        ("parseLocalConst -> Vault.safeParse", "function-local const from external import"),
+        ("ConfigLoader.run -> Vault.safeParse", "class field initialized from external import"),
+        ("viaImportedConst -> Vault.safeParse", "imported const from another file"),
+        ("viaBarrelExternal -> Vault.safeParse", "re-exported external import through barrel"),
+        ("py_ext_member -> LocalPy.unique_py_parse", "Python external module call"),
+        ("py_ext_direct -> LocalPy.unique_py_parse", "Python external imported function call"),
+        ("GoExt -> LocalGo.UniqueGoParse", "Go external package call"),
+        ("rs_ext -> LocalRs.unique_rs_parse", "Rust external crate call"),
+    ];
+    let wrong: Vec<String> = forbidden.iter().filter(|(x, _)| e.contains(*x)).map(|(x, why)| format!("{x}  ({why})")).collect();
+
+    let _ = std::fs::remove_dir_all(&root);
+    assert!(missing.is_empty() && wrong.is_empty(), "missing:\n  {}\nwrong:\n  {}\nall edges:\n  {}",
+        missing.join("\n  "), wrong.join("\n  "), { let mut v: Vec<_> = e.into_iter().collect(); v.sort(); v.join("\n  ") });
+}

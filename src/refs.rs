@@ -10,6 +10,7 @@ use crate::query::{self, Index};
 use crate::show::Source;
 use serde_json::{json, Value};
 use std::collections::HashMap;
+use std::io::{self, Write};
 
 /// Longest source line printed for a site.
 const MAX_CODE_CHARS: usize = 140;
@@ -100,29 +101,30 @@ fn code(g: &Graph, src: &mut Source, file: u32, line: u32) -> String {
     }
 }
 
-pub fn print(g: &Graph, src: &mut Source, targets: &[u32], sites: &[Site]) {
+pub fn print(out: &mut impl Write, g: &Graph, src: &mut Source, targets: &[u32], sites: &[Site]) -> io::Result<()> {
     for d in targets {
-        println!("{} {}  {}", g.defs[*d as usize].kind.label(), g.defs[*d as usize].qual, query::loc(g, *d));
+        writeln!(out, "{} {}  {}", g.defs[*d as usize].kind.label(), g.defs[*d as usize].qual, query::loc(g, *d))?;
     }
     let locs: Vec<String> = sites.iter().map(|s| format!("{}:{}", g.files[s.file as usize].path, s.line)).collect();
     let froms: Vec<String> = sites.iter().map(|s| s.from.map(|f| g.defs[f as usize].qual.clone()).unwrap_or_else(|| "(top level)".into())).collect();
     let w_loc = locs.iter().map(|l| l.len()).max().unwrap_or(0);
     let w_from = froms.iter().map(|f| f.chars().count()).max().unwrap_or(0).min(40);
     for (i, s) in sites.iter().enumerate() {
-        println!("  {:<w_loc$}  {:<7}  {:<w_from$}  {}", locs[i], s.kind.label(), froms[i], code(g, src, s.file, s.line));
+        writeln!(out, "  {:<w_loc$}  {:<7}  {:<w_from$}  {}", locs[i], s.kind.label(), froms[i], code(g, src, s.file, s.line))?;
     }
     if sites.is_empty() {
-        println!("  (no references found)");
+        writeln!(out, "  (no references found)")?;
         // Like `callers`: macros, reflection and untyped receivers hide uses from the graph.
         let name = targets.first().map(|d| g.defs[*d as usize].name.as_str()).unwrap_or("");
-        println!("  note: not proof it's unused; confirm with a text search, e.g. `rg -w {name}`");
+        writeln!(out, "  note: not proof it's unused; confirm with a text search, e.g. `rg -w {name}`")?;
     } else {
         let mut files: Vec<u32> = sites.iter().map(|s| s.file).collect();
         files.sort();
         files.dedup();
         let plural = |n: usize, w: &str| if n == 1 { format!("1 {w}") } else { format!("{n} {w}s") };
-        println!("  {} in {}", plural(sites.len(), "reference"), plural(files.len(), "file"));
+        writeln!(out, "  {} in {}", plural(sites.len(), "reference"), plural(files.len(), "file"))?;
     }
+    Ok(())
 }
 
 pub fn json(g: &Graph, src: &mut Source, targets: &[u32], sites: &[Site]) -> Value {

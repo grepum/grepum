@@ -15,6 +15,7 @@ use crate::lang;
 use crate::query;
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
+use std::io::{self, Write};
 use tree_sitter::{Node, Point, Tree};
 
 pub struct Options {
@@ -264,7 +265,7 @@ fn expand(g: &Graph, picked: &Picked, callees: bool) -> Vec<(u32, Option<u32>, b
     out
 }
 
-pub fn print(g: &Graph, src: &mut Source, picked: &Picked, opts: &Options) {
+pub fn print(out: &mut impl Write, g: &Graph, src: &mut Source, picked: &Picked, opts: &Options) -> io::Result<()> {
     let mut first = true;
     for (d, caller, follow) in expand(g, picked, opts.callees) {
         let Some(s) = render_one(g, src, d, follow) else {
@@ -272,7 +273,7 @@ pub fn print(g: &Graph, src: &mut Source, picked: &Picked, opts: &Options) {
             continue;
         };
         if !first {
-            println!();
+            writeln!(out)?;
         }
         first = false;
         let def = &g.defs[s.def as usize];
@@ -284,7 +285,7 @@ pub fn print(g: &Graph, src: &mut Source, picked: &Picked, opts: &Options) {
         if let Some(c) = caller {
             head.push_str(&format!("  (called by {})", g.defs[c as usize].qual));
         }
-        println!("{head}");
+        writeln!(out, "{head}")?;
         let width = s.end.to_string().len();
         let gutter = |n: Option<u32>| match (opts.line_numbers, n) {
             (false, _) => String::new(),
@@ -294,14 +295,15 @@ pub fn print(g: &Graph, src: &mut Source, picked: &Picked, opts: &Options) {
         let mut next = 0;
         for (from, to) in keep(s.lines.len(), s.lead, opts.max_lines) {
             if from > next {
-                println!("{}⋮ {} lines omitted (--max-lines 0 shows all)", gutter(None), from - next);
+                writeln!(out, "{}⋮ {} lines omitted (--max-lines 0 shows all)", gutter(None), from - next)?;
             }
             for (k, l) in s.lines[from..to].iter().enumerate() {
-                println!("{}{}", gutter(Some(s.start + (from + k) as u32)), clip(l));
+                writeln!(out, "{}{}", gutter(Some(s.start + (from + k) as u32)), clip(l))?;
             }
             next = to;
         }
     }
+    Ok(())
 }
 
 pub fn json(g: &Graph, src: &mut Source, picked: &Picked, opts: &Options) -> Value {

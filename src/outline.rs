@@ -13,6 +13,7 @@ use crate::query::{self, Index};
 use crate::show::{self, Source};
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
+use std::io::{self, Write};
 use tree_sitter::Node;
 
 /// Longest signature printed.
@@ -288,7 +289,7 @@ fn callers(g: &Graph, idx: &Index, d: u32) -> usize {
         .len()
 }
 
-pub fn print(g: &Graph, src: &mut Source, sections: &[Section], opts: &Options) {
+pub fn print(out: &mut impl Write, g: &Graph, src: &mut Source, sections: &[Section], opts: &Options) -> io::Result<()> {
     let idx = Index::new(g);
     let mut first = true;
     for s in sections {
@@ -302,12 +303,12 @@ pub fn print(g: &Graph, src: &mut Source, sections: &[Section], opts: &Options) 
             continue;
         }
         if !first {
-            println!();
+            writeln!(out)?;
         }
         first = false;
-        println!("{}  ({lines} lines)", file.path);
+        writeln!(out, "{}  ({lines} lines)", file.path)?;
         if entries.is_empty() {
-            println!("  (no definitions)");
+            writeln!(out, "  (no definitions)")?;
         }
         let range = |e: &Entry| if e.end_line > e.line { format!("{}-{}", e.line, e.end_line) } else { e.line.to_string() };
         let width = entries.iter().map(|e| range(e).len()).max().unwrap_or(0);
@@ -318,9 +319,10 @@ pub fn print(g: &Graph, src: &mut Source, sections: &[Section], opts: &Options) 
                 1 => "  (1 caller)".to_string(),
                 n => format!("  ({n} callers)"),
             };
-            println!("  {range:<width$}  {}{}{called}", "  ".repeat(e.depth), e.signature);
+            writeln!(out, "  {range:<width$}  {}{}{called}", "  ".repeat(e.depth), e.signature)?;
         }
     }
+    Ok(())
 }
 
 pub fn json(g: &Graph, src: &mut Source, sections: &[Section], opts: &Options) -> Value {

@@ -16,7 +16,7 @@ use serde::{de::DeserializeOwned, Serialize};
 use std::path::{Path, PathBuf};
 
 /// Bump whenever extraction or resolution output changes meaning.
-pub const SCHEMA: u32 = 7;
+pub const SCHEMA: u32 = 8;
 
 pub struct Store {
     pub shared: PathBuf,

@@ -509,71 +509,157 @@ impl<'a> Resolver<'a> {
         }
     }
 
-    fn hint_types(&self, file: u32, scope: Option<u32>, owner: Option<&str>, hint: &TypeHint, depth: u8) -> Vec<u32> {
+    /// Module-level variable or re-exported external value `name` of `files`.
+    fn exported_value(&self, files: &[u32], name: &str, exp_depth: u8, depth: u8) -> Option<Thing> {
         if depth == 0 {
-            return vec![];
+            return None;
         }
-        match hint {
-            TypeHint::Named(t) => self.types_named(file, t),
-            TypeHint::Alias(a) => match self.binding(file, scope, a) {
-                Some(h) => self.hint_types(file, scope, owner, &h, depth - 1),
-                None => vec![],
-            },
-            TypeHint::CallResult { name, qualifier } => {
-                let (targets, _) = self.resolve_call(file, scope, owner, &Callee { name, qualifier: qualifier.as_deref(), line: 0 }, depth - 1);
-                let mut out = vec![];
-                for t in targets {
-                    let d = &self.defs[t as usize];
-                    if d.kind.is_type() {
-                        out.push(t);
-                    } else if let Some(ret) = &self.inputs[d.file as usize].facts.defs[(t - self.files[d.file as usize].first_def) as usize].ret {
-                        out.extend(self.types_named(d.file, ret));
-                    }
-                }
-                out
+        for f in files {
+            if let Some(h) = self.ctx[*f as usize].bindings.get(&(None, name.to_string())) {
+                return Some(self.hint_thing(*f, None, None, h, depth));
             }
-            TypeHint::Unknown => vec![],
         }
+        if exp_depth == 0 {
+            return None;
+        }
+        for f in files {
+            for ex in self.inputs[*f as usize].facts.exports.iter().filter(|e| e.exported == name) {
+                let found = match self.ctx[*f as usize].imports.get(&ex.local) {
+                    Some(Target::External) => Some(Thing::External),
+                    Some(Target::Symbol(tf, orig)) => self.exported_value(tf, orig, exp_depth - 1, depth),
+                    Some(Target::Module(k, tf)) => Some(Thing::Module(k.clone(), tf.clone())),
+                    None if ex.local != name => self.exported_value(&[*f], &ex.local, exp_depth - 1, depth),
+                    None => None,
+                };
+                if found.is_some() {
+                    return found;
+                }
+            }
+            for (exported, target) in &self.ctx[*f as usize].reexports {
+                let found = match (exported.as_deref(), target) {
+                    (Some(e), Target::External) if e == name => Some(Thing::External),
+                    (Some(e), Target::Symbol(tf, orig)) if e == name => self.exported_value(tf, orig, exp_depth - 1, depth),
+                    (Some(e), Target::Module(k, tf)) if e == name => Some(Thing::Module(k.clone(), tf.clone())),
+                    (None, Target::Module(_, tf)) => self.exported_value(tf, name, exp_depth - 1, depth),
+                    _ => None,
+                };
+                if found.is_some() {
+                    return found;
+                }
+            }
+        }
+        None
     }
 
-    /// A binding with an explicit type name that isn't defined in the repo is
-    /// an external type: don't guess a same-named local method for it.
+    /// What calling `qualifier.name(...)` produces: the targets' types or
+    /// declared return types, or `Thing::External` when the call's receiver or
+    /// target is known to be external.
+    fn call_result_thing(
+        &self,
+        file: u32,
+        scope: Option<u32>,
+        owner: Option<&str>,
+        name: &str,
+        qualifier: Option<&str>,
+        depth: u8,
+    ) -> Thing {
+        if depth == 0 {
+            return Thing::Unknown;
+        }
+        if let Some(q) = qualifier {
+            if q != "?" {
+                match self.resolve_qualifier(file, scope, owner, q, depth - 1) {
+                    Thing::External => return Thing::External,
+                    Thing::Types(ts) if !ts.is_empty() => return self.returns_of(self.methods_of(&ts, name)),
+                    Thing::Module(_, files) => {
+                        let targets = self.call_targets(self.exported(&files, name, 4));
+                        return if !targets.is_empty() {
+                            self.returns_of(targets)
+                        } else if matches!(self.exported_value(&files, name, 4, depth - 1), Some(Thing::External)) {
+                            Thing::External
+                        } else {
+                            Thing::Unknown
+                        };
+                    }
+                    _ => {}
+                }
+            }
+            let (targets, _) = self.resolve_call(file, scope, owner, &Callee { name, qualifier: Some(q), line: 0 }, depth - 1);
+            return self.returns_of(targets);
+        }
+        let (targets, _) = self.resolve_call(file, scope, owner, &Callee { name, qualifier: None, line: 0 }, depth - 1);
+        if !targets.is_empty() {
+            return self.returns_of(targets);
+        }
+        if let Some(hint) = self.binding(file, scope, name) {
+            return match self.hint_thing(file, scope, owner, &hint, depth - 1) {
+                Thing::External => Thing::External,
+                _ => Thing::Unknown,
+            };
+        }
+        if !self.is_local(file, scope, name, 0) {
+            match self.ctx[file as usize].imports.get(name) {
+                Some(Target::External) => return Thing::External,
+                Some(Target::Symbol(f, orig))
+                    if matches!(self.exported_value(f, orig, 4, depth - 1), Some(Thing::External)) =>
+                {
+                    return Thing::External;
+                }
+                _ => {}
+            }
+        }
+        Thing::Unknown
+    }
+
+    /// A binding's type, or `Thing::External` when its explicit type or
+    /// initializer comes from outside the repository: don't guess a same-named
+    /// local method for it.
     fn hint_thing(&self, file: u32, scope: Option<u32>, owner: Option<&str>, hint: &TypeHint, depth: u8) -> Thing {
-        let ts = self.hint_types(file, scope, owner, hint, depth);
-        if !ts.is_empty() {
-            return Thing::Types(ts);
+        if depth == 0 {
+            return Thing::Unknown;
         }
         match hint {
-            TypeHint::Named(_) => Thing::External,
-            TypeHint::Alias(a) => match self.binding(file, scope, a) {
-                Some(TypeHint::Named(_)) => Thing::External,
-                _ => Thing::Unknown,
-            },
-            TypeHint::CallResult { .. } | TypeHint::Unknown => Thing::Unknown,
+            TypeHint::Named(t) => {
+                let ts = self.types_named(file, t);
+                if ts.is_empty() { Thing::External } else { Thing::Types(ts) }
+            }
+            TypeHint::Alias(a) => self.resolve_qualifier(file, scope, owner, a, depth - 1),
+            TypeHint::CallResult { name, qualifier } => {
+                self.call_result_thing(file, scope, owner, name, qualifier.as_deref(), depth)
+            }
+            TypeHint::Unknown => Thing::Unknown,
         }
     }
 
-    fn fields_are_named(&self, types: &[u32], field: &str) -> bool {
-        types.iter().all(|t| {
-            self.owner_fields
-                .get(&(self.defs[*t as usize].name.clone(), field.to_string()))
-                .is_none_or(|hs| hs.iter().all(|(_, h)| matches!(h, TypeHint::Named(_))))
-        })
-    }
-
-    fn field_types(&self, types: &[u32], field: &str, depth: u8) -> Vec<u32> {
+    fn field_thing(&self, types: &[u32], field: &str, depth: u8) -> Thing {
         let mut out = vec![];
+        let mut saw_hint = false;
+        let mut all_external = true;
         for t in types {
             let d = &self.defs[*t as usize];
             if let Some(hints) = self.owner_fields.get(&(d.name.clone(), field.to_string())) {
                 for (hf, h) in hints {
-                    out.extend(self.hint_types(*hf, None, Some(&d.name), h, depth));
+                    saw_hint = true;
+                    match self.hint_thing(*hf, None, Some(&d.name), h, depth.saturating_sub(1)) {
+                        Thing::Types(ts) => {
+                            all_external = false;
+                            out.extend(ts);
+                        }
+                        Thing::External => {}
+                        _ => all_external = false,
+                    }
                 }
             }
         }
-        out.sort();
-        out.dedup();
-        out
+        if !out.is_empty() {
+            out.sort();
+            out.dedup();
+            Thing::Types(out)
+        } else if saw_hint && all_external {
+            Thing::External
+        } else {
+            Thing::Unknown
+        }
     }
 
     /// Types of member `field` of class `owner`, including members inherited
@@ -589,7 +675,10 @@ impl<'a> Resolver<'a> {
             }
             i += 1;
         }
-        self.field_types(&types, field, depth)
+        match self.field_thing(&types, field, depth) {
+            Thing::Types(ts) => ts,
+            _ => vec![],
+        }
     }
 
     fn owner_types(&self, file: u32, owner: &str) -> Vec<u32> {
@@ -605,6 +694,9 @@ impl<'a> Resolver<'a> {
     }
 
     fn resolve_qualifier(&self, file: u32, scope: Option<u32>, owner: Option<&str>, q: &str, depth: u8) -> Thing {
+        if depth == 0 {
+            return Thing::Unknown;
+        }
         let rules = self.rules(file);
         let modules = self.modules(file);
         let segs = qual_segments(q);
@@ -636,10 +728,7 @@ impl<'a> Resolver<'a> {
                 }
                 None => Thing::Unknown,
             },
-            h if h.ends_with("()") => {
-                let (targets, _) = self.resolve_call(file, scope, owner, &Callee { name: &h[..h.len() - 2], qualifier: None, line: 0 }, depth.saturating_sub(1));
-                self.returns_of(targets)
-            }
+            h if h.ends_with("()") => self.call_result_thing(file, scope, owner, &h[..h.len() - 2], None, depth),
             h => {
                 let member = || -> Vec<u32> {
                     match owner {
@@ -660,11 +749,9 @@ impl<'a> Resolver<'a> {
                             if !ts.is_empty() {
                                 Thing::Types(ts)
                             } else {
-                                // An imported module-level variable (`registry = Registry()`).
-                                f.iter()
-                                    .find_map(|tf| self.ctx[*tf as usize].bindings.get(&(None, n.clone())).map(|h| (*tf, h.clone())))
-                                    .map(|(tf, h)| self.hint_thing(tf, None, None, &h, depth))
-                                    .unwrap_or(Thing::Unknown)
+                                // An imported module-level variable (`registry = Registry()`,
+                                // `configSchema = z.object(...)`), or a re-exported external symbol.
+                                self.exported_value(f, n, 4, depth).unwrap_or(Thing::Unknown)
                             }
                         }
                         Target::External => Thing::External,
@@ -681,31 +768,34 @@ impl<'a> Resolver<'a> {
             if let Some(m) = seg.strip_suffix("()") {
                 thing = match thing {
                     Thing::Types(ts) if !ts.is_empty() => self.returns_of(self.methods_of(&ts, m)),
-                    Thing::Module(_, files) => self.returns_of(self.exported(&files, m, 4)),
+                    Thing::Module(_, files) => {
+                        let targets = self.call_targets(self.exported(&files, m, 4));
+                        if !targets.is_empty() {
+                            self.returns_of(targets)
+                        } else if matches!(self.exported_value(&files, m, 4, depth - 1), Some(Thing::External)) {
+                            Thing::External
+                        } else {
+                            Thing::Unknown
+                        }
+                    }
                     Thing::External => return Thing::External,
                     _ => return Thing::Unknown,
                 };
                 continue;
             }
             thing = match thing {
-                Thing::Types(ts) if !ts.is_empty() => {
-                    let has_field = ts.iter().any(|t| self.owner_fields.contains_key(&(self.defs[*t as usize].name.clone(), seg.to_string())));
-                    let ft = self.field_types(&ts, seg, depth);
-                    if !ft.is_empty() {
-                        Thing::Types(ft)
-                    } else if has_field && self.fields_are_named(&ts, seg) {
-                        Thing::External
-                    } else {
-                        Thing::Unknown
-                    }
-                }
+                Thing::Types(ts) if !ts.is_empty() => self.field_thing(&ts, seg, depth),
                 Thing::Module(key, files) => {
                     let sub = format!("{key}.{seg}");
                     if let Some(f) = modules.submodule(&key, seg) {
                         Thing::Module(sub, f)
                     } else {
                         let ts: Vec<u32> = self.exported(&files, seg, 4).into_iter().filter(|d| self.defs[*d as usize].kind.is_type()).collect();
-                        if ts.is_empty() { Thing::Unknown } else { Thing::Types(ts) }
+                        if !ts.is_empty() {
+                            Thing::Types(ts)
+                        } else {
+                            self.exported_value(&files, seg, 4, depth).unwrap_or(Thing::Unknown)
+                        }
                     }
                 }
                 other => return if matches!(other, Thing::External) { Thing::External } else { Thing::Unknown },
@@ -984,7 +1074,7 @@ impl<'a> Resolver<'a> {
         }
         for r in facts.refs.iter().filter(|r| matches!(r.kind, RefKind::Call | RefKind::New)) {
             stats.refs += 1;
-            let (targets, conf) = self.resolve_call(fi, r.scope, r.owner.as_deref(), &Callee { name: &r.name, qualifier: r.qualifier.as_deref(), line: r.line }, 6);
+            let (targets, conf) = self.resolve_call(fi, r.scope, r.owner.as_deref(), &Callee { name: &r.name, qualifier: r.qualifier.as_deref(), line: r.line }, 8);
             let Some(conf) = conf else {
                 let known = self.by_name.contains_key(&r.name);
                 if known { stats.ambiguous += 1 } else { stats.unresolved += 1 }

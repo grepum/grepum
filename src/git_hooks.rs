@@ -5,6 +5,7 @@
 
 use crate::git::Repo;
 use anyhow::{bail, Result};
+use std::io::Write;
 
 const HOOKS: &[&str] = &["post-commit", "post-checkout", "post-merge", "post-rewrite"];
 const HOOK_BEGIN: &str = "# >>> grepum >>>";
@@ -72,7 +73,7 @@ fn shared_hooks_dir(repo: &Repo, dir: &std::path::Path) -> Option<String> {
     ))
 }
 
-pub fn run(repo: &Repo, install: bool, force: bool) -> Result<()> {
+pub fn run(out: &mut impl Write, repo: &Repo, install: bool, force: bool) -> Result<()> {
     let dir = repo.hooks_dir()?;
     if install && !force {
         if let Some(why) = shared_hooks_dir(repo, &dir) {
@@ -125,6 +126,6 @@ pub fn run(repo: &Repo, install: bool, force: bool) -> Result<()> {
         #[cfg(not(unix))]
         let _ = created;
     }
-    println!("{} hooks in {}", if install { "installed" } else { "removed" }, dir.display());
+    writeln!(out, "{} hooks in {}", if install { "installed" } else { "removed" }, dir.display())?;
     Ok(())
 }

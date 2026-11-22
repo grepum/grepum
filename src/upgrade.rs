@@ -3,6 +3,7 @@
 //! Needs `curl` (and PowerShell on Windows); no HTTP client is linked into grepum.
 
 use anyhow::{bail, Context, Result};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -13,20 +14,20 @@ pub struct Options {
     pub force: bool,
 }
 
-pub fn run(opts: &Options) -> Result<()> {
+pub fn run(out: &mut impl Write, opts: &Options) -> Result<()> {
     let current = env!("CARGO_PKG_VERSION");
     let latest = latest_version().context("could not look up the latest grepum release")?;
     let newer = is_newer(&latest, current);
     if opts.check {
         if newer {
-            println!("grepum {current} is installed; {latest} is available. Run `grepum upgrade`.");
+            writeln!(out, "grepum {current} is installed; {latest} is available. Run `grepum upgrade`.")?;
         } else {
-            println!("grepum {current} is up to date.");
+            writeln!(out, "grepum {current} is up to date.")?;
         }
         return Ok(());
     }
     if !newer && !opts.force {
-        println!("grepum {current} is up to date.");
+        writeln!(out, "grepum {current} is up to date.")?;
         return Ok(());
     }
 
@@ -36,10 +37,11 @@ pub fn run(opts: &Options) -> Result<()> {
         bail!("this grepum ({}) is managed by another tool; upgrade it with: {hint}", exe.display());
     }
 
-    println!("upgrading grepum {current} -> {latest} in {}", dir.display());
+    writeln!(out, "upgrading grepum {current} -> {latest} in {}", dir.display())?;
+    out.flush()?;
     install_into(&dir, &exe)?;
-    let out = Command::new(&exe).arg("--version").output()?;
-    print!("{}", String::from_utf8_lossy(&out.stdout));
+    let cmd_out = Command::new(&exe).arg("--version").output()?;
+    write!(out, "{}", String::from_utf8_lossy(&cmd_out.stdout))?;
     Ok(())
 }
 

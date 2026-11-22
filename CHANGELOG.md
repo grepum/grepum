@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.5.1
+
+- **No panic on broken pipes** (#1): piping large output into `head` or
+  another consumer that closes early (`grepum outline big.ts | head -2`,
+  `--json`, `export`) exits cleanly with status 0 instead of panicking with
+  `Broken pipe`. Works on Unix and Windows; output is also buffered.
+- **No false `(inferred)` call edges on values from external imports** (#2):
+  a binding initialised from an external import (`const schema = z.object(...)`,
+  chained calls, member accesses, aliases, class fields, and re-exports) is
+  tracked as external, so calling a method on it no longer links to a
+  same-named local method.
+- **Rust crate roots without `src/`**: `crate::` imports now resolve in
+  crates whose `main.rs`/`lib.rs` sits outside a `src/` directory (e.g.
+  `crates/core/main.rs`), instead of being treated as external.
+- **Benchmark against plain grep** (`benchmark/vs_grep.py`): tokens an agent
+  reads to answer "who calls X", "read X" and "what's in this file" with
+  grepum versus `git grep` and reading files, and who-calls recall/precision
+  against the synthetic projects' call graphs and the TypeScript compiler on
+  hono. Charts in the README.
+
 ## 0.5.0
 
 - **`grepum refs <Symbol>`**: every place that uses a symbol, beside calls:

@@ -19,6 +19,7 @@ use anyhow::{bail, Result};
 use clap::{Parser, Subcommand};
 use git::Repo;
 use snapshot::Snapshot;
+use std::io::{self, BufWriter, Write};
 use std::path::PathBuf;
 use store::Store;
 
@@ -273,17 +274,42 @@ fn truncate(s: &str, n: usize) -> String {
     if s.chars().count() <= n { s.to_string() } else { format!("{}…", s.chars().take(n - 1).collect::<String>()) }
 }
 
-fn print_json(v: &serde_json::Value) {
-    println!("{}", serde_json::to_string_pretty(v).unwrap());
+fn print_json(out: &mut impl Write, v: &serde_json::Value) -> Result<()> {
+    serde_json::to_writer_pretty(&mut *out, v)?;
+    writeln!(out)?;
+    Ok(())
+}
+
+fn is_broken_pipe(err: &anyhow::Error) -> bool {
+    err.chain().any(|c| {
+        c.downcast_ref::<io::Error>().is_some_and(|e| e.kind() == io::ErrorKind::BrokenPipe)
+            || c.downcast_ref::<serde_json::Error>().and_then(|e| e.io_error_kind()) == Some(io::ErrorKind::BrokenPipe)
+    })
 }
 
 fn main() -> Result<()> {
+    match run() {
+        Ok(()) => Ok(()),
+        Err(e) if is_broken_pipe(&e) => Ok(()),
+        Err(e) => Err(e),
+    }
+}
+
+fn run() -> Result<()> {
+    let mut out = BufWriter::new(io::stdout());
+    run_cmd(&mut out)?;
+    out.flush()?;
+    Ok(())
+}
+
+fn run_cmd(out: &mut impl Write) -> Result<()> {
     let cli = Cli::parse();
     rayon::ThreadPoolBuilder::new().stack_size(16 << 20).build_global().ok();
     if let Cmd::Facts { file } = &cli.cmd {
         let lang = facts::Lang::from_path(&file.to_string_lossy()).ok_or_else(|| anyhow::anyhow!("unsupported file type"))?;
         let f = extract::extract(lang, &std::fs::read(file)?);
-        println!("{}", serde_json::to_string_pretty(&f)?);
+        serde_json::to_writer_pretty(&mut *out, &f)?;
+        writeln!(out)?;
         return Ok(());
     }
     let cwd = match &cli.dir {
@@ -291,12 +317,12 @@ fn main() -> Result<()> {
         None => std::env::current_dir()?,
     };
     match cli.cmd {
-        Cmd::Upgrade { check, force } => return upgrade::run(&upgrade::Options { check, force }),
+        Cmd::Upgrade { check, force } => return upgrade::run(out, &upgrade::Options { check, force }),
         Cmd::Install { target: Target::Claude, scope, force, dry_run } => {
-            return install::install_claude(&cwd, &install::Options { scope, force, dry_run });
+            return install::install_claude(out, &cwd, &install::Options { scope, force, dry_run });
         }
         Cmd::Uninstall { target: Target::Claude, scope, force, dry_run } => {
-            return install::uninstall_claude(&cwd, &install::Options { scope, force, dry_run });
+            return install::uninstall_claude(out, &cwd, &install::Options { scope, force, dry_run });
         }
         _ => {}
     }
@@ -310,41 +336,44 @@ fn main() -> Result<()> {
             let (edges, references) = s.graph.edge_counts();
             if cli.json {
                 let st = &s.graph.stats;
-                print_json(&serde_json::json!({
+                print_json(out, &serde_json::json!({
                     "label": s.label, "source": s.report.source, "files": s.graph.files.len(), "defs": s.graph.defs.len(),
                     "edges": edges, "references": references, "facts_cached": s.report.facts_cached, "facts_extracted": s.report.facts_extracted,
                     "ms": s.report.ms, "refs": st.refs, "exact": st.exact, "inferred": st.inferred,
-                }));
+                }))?;
             } else if !quiet {
                 let r = &s.report;
-                println!("{}", s.label);
-                println!(
+                writeln!(out, "{}", s.label)?;
+                writeln!(
+                    out,
                     "  {} files, {} symbols, {edges} edges, {references} references  [{}; {} facts reused, {} extracted]  {:.1} ms",
                     s.graph.files.len(), s.graph.defs.len(), r.source, r.facts_cached, r.facts_extracted, r.ms
-                );
+                )?;
                 let st = &s.graph.stats;
                 if st.refs > 0 {
-                    println!(
+                    writeln!(
+                        out,
                         "  calls: {} exact, {} inferred, {} ambiguous (dropped), {} external/unknown",
                         st.exact, st.inferred, st.ambiguous, st.unresolved
-                    );
+                    )?;
                 }
                 if st.uses > 0 {
-                    println!("  type uses and member accesses: {} linked, {} external/unknown", st.uses_linked, st.uses - st.uses_linked);
+                    writeln!(out, "  type uses and member accesses: {} linked, {} external/unknown", st.uses_linked, st.uses - st.uses_linked)?;
                 }
             }
         }
         Cmd::Status => {
             let (shared, local) = store.disk_usage();
             let s = snapshot(&repo, &store, rev, false)?;
-            println!("worktree      {}", repo.toplevel.display());
+            writeln!(out, "worktree      {}", repo.toplevel.display())?;
             let (edges, references) = s.graph.edge_counts();
-            println!(
+            writeln!(
+                out,
                 "graph         {}  ({} files, {} symbols, {edges} edges, {references} references, {})",
                 s.label, s.graph.files.len(), s.graph.defs.len(), s.report.source
-            );
-            println!("shared cache  {}  ({:.1} KiB, all worktrees)", store.shared.display(), shared as f64 / 1024.0);
-            println!("local cache   {}  ({:.1} KiB, this worktree)", store.local.display(), local as f64 / 1024.0);
+            )?;
+            writeln!(out, "shared cache  {}  ({:.1} KiB, all worktrees)", store.shared.display(), shared as f64 / 1024.0)?;
+            writeln!(out, "local cache   {}  ({:.1} KiB, this worktree)", store.local.display(), local as f64 / 1024.0)?;
         }
         Cmd::Summary { top } => {
             let s = snapshot(&repo, &store, rev, false)?;
@@ -354,8 +383,8 @@ fn main() -> Result<()> {
                 *langs.entry(format!("{:?}", f.lang)).or_default() += 1;
             }
             let langs: Vec<String> = langs.iter().map(|(l, n)| format!("{l} {n}")).collect();
-            println!("grepum code graph: {}", s.label);
-            println!("  {} files ({}), {} symbols, {} call/inherit edges", g.files.len(), langs.join(", "), g.defs.len(), g.edge_counts().0);
+            writeln!(out, "grepum code graph: {}", s.label)?;
+            writeln!(out, "  {} files ({}), {} symbols, {} call/inherit edges", g.files.len(), langs.join(", "), g.defs.len(), g.edge_counts().0)?;
             let idx = query::Index::new(g);
             let mut hubs: Vec<(usize, u32)> = idx
                 .incoming
@@ -366,28 +395,28 @@ fn main() -> Result<()> {
             hubs.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
             let hubs: Vec<String> = hubs.iter().take(top).map(|(n, d)| format!("{} ({n})", g.defs[*d as usize].qual)).collect();
             if !hubs.is_empty() {
-                println!("  most-called: {}", hubs.join(", "));
+                writeln!(out, "  most-called: {}", hubs.join(", "))?;
             }
-            println!("  query it: grepum find <words> | callers <Symbol> | callees <Symbol> | context <words> | diff <rev>");
+            writeln!(out, "  query it: grepum find <words> | callers <Symbol> | callees <Symbol> | context <words> | diff <rev>")?;
         }
         Cmd::Find { query, limit, history } => {
             let s = snapshot(&repo, &store, rev, false)?;
             let idx = query::Index::new(&s.graph);
             let hits = query::find(&s.graph, &idx, &query.join(" "), limit);
             if cli.json {
-                print_json(&serde_json::Value::Array(
+                print_json(out, &serde_json::Value::Array(
                     hits.iter()
                         .map(|(sc, d)| {
                             let def = &s.graph.defs[*d as usize];
                             serde_json::json!({"symbol": def.qual, "kind": def.kind.label(), "at": query::loc(&s.graph, *d), "score": sc})
                         })
                         .collect(),
-                ));
+                ))?;
             } else {
                 for (_, d) in hits {
                     let def = &s.graph.defs[d as usize];
                     let tags = if def.attrs.is_empty() { String::new() } else { format!("  [{}]", def.attrs.join(", ")) };
-                    println!("{:<9} {:<40} {}{tags}", def.kind.label(), def.qual, query::loc(&s.graph, d));
+                    writeln!(out, "{:<9} {:<40} {}{tags}", def.kind.label(), def.qual, query::loc(&s.graph, d))?;
                 }
             }
             if history {
@@ -398,19 +427,20 @@ fn main() -> Result<()> {
                 let gone = history::deleted(&h, &current);
                 let ranked = rank_deleted(&gone, &query.join(" "), limit);
                 if cli.json {
-                    print_json(&serde_json::json!({"deleted": ranked}));
+                    print_json(out, &serde_json::json!({"deleted": ranked}))?;
                 } else {
-                    println!();
+                    writeln!(out)?;
                     if ranked.is_empty() {
-                        println!("no deleted symbols match ({} commits searched)", h.commits);
+                        writeln!(out, "no deleted symbols match ({} commits searched)", h.commits)?;
                     } else {
-                        println!("deleted symbols ({} commits searched in {:.0} ms):", h.commits, t.elapsed().as_secs_f64() * 1e3);
+                        writeln!(out, "deleted symbols ({} commits searched in {:.0} ms):", h.commits, t.elapsed().as_secs_f64() * 1e3)?;
                         for e in ranked {
                             let short = &e.commit[..10.min(e.commit.len())];
-                            println!(
+                            writeln!(
+                                out,
                                 "{:<9} {:<40} {}:{}  removed {} in {short}  (git show {short}^:{})",
                                 e.kind, e.qual, e.path, e.line, date(e.time), e.path
-                            );
+                            )?;
                         }
                     }
                 }
@@ -421,18 +451,19 @@ fn main() -> Result<()> {
             let h = history::scan(&repo, &store, rev.unwrap_or("HEAD"), max_commits)?;
             let hits: Vec<&history::Event> = h.events.iter().filter(|e| history::matches(e, symbol)).take(limit).collect();
             if cli.json {
-                print_json(&serde_json::json!({"symbol": symbol, "commits_searched": h.commits, "events": hits}));
+                print_json(out, &serde_json::json!({"symbol": symbol, "commits_searched": h.commits, "events": hits}))?;
             } else {
                 if hits.is_empty() {
-                    println!("no history for {symbol} in {} commits", h.commits);
+                    writeln!(out, "no history for {symbol} in {} commits", h.commits)?;
                 }
                 for e in &hits {
                     let from = e.from.as_ref().map(|f| format!(" (from {f})")).unwrap_or_default();
-                    println!(
+                    writeln!(
+                        out,
                         "{}  {}  {:<8}  {:<6} {}  {}:{}{from}  {}",
                         date(e.time), &e.commit[..10.min(e.commit.len())], e.change.label(), e.kind, e.qual, e.path, e.line,
                         truncate(&e.subject, 60)
-                    );
+                    )?;
                 }
                 eprintln!(
                     "{} commits searched in {:.0} ms ({} from cache; {} file versions parsed, {} reused)",
@@ -457,27 +488,27 @@ fn main() -> Result<()> {
             }
             let hops = query::walk(g, &idx, &starts, depth, reverse);
             if cli.json {
-                print_json(&serde_json::json!({
+                print_json(out, &serde_json::json!({
                     "symbols": starts.iter().map(|d| serde_json::json!({"symbol": g.defs[*d as usize].qual, "at": query::loc(g, *d)})).collect::<Vec<_>>(),
                     if reverse { "callers" } else { "callees" }: query::hops_json(g, &hops),
-                }));
+                }))?;
             } else {
                 for d in &starts {
-                    println!("{} {}  {}", g.defs[*d as usize].kind.label(), g.defs[*d as usize].qual, query::loc(g, *d));
+                    writeln!(out, "{} {}  {}", g.defs[*d as usize].kind.label(), g.defs[*d as usize].qual, query::loc(g, *d))?;
                 }
                 let arrow = if reverse { "<-" } else { "->" };
                 for h in &hops {
                     let (n, at) = query::hop_label(g, h);
                     let mark = if h.conf == graph::Conf::Inferred { "  (inferred)" } else { "" };
-                    println!("{}{arrow} {n}  {at}{mark}", "  ".repeat(h.depth as usize));
+                    writeln!(out, "{}{arrow} {n}  {at}{mark}", "  ".repeat(h.depth as usize))?;
                 }
                 if hops.is_empty() {
-                    println!("  (no {} found)", if reverse { "callers" } else { "callees" });
+                    writeln!(out, "  (no {} found)", if reverse { "callers" } else { "callees" })?;
                     if reverse {
                         // A call graph can miss callers (receivers it can't type, macros,
                         // reflection, data-driven dispatch). Don't let this read as "dead code".
                         let name = g.defs[starts[0] as usize].name.as_str();
-                        println!("  note: not proof it's unused; confirm with a text search, e.g. `rg -w {name}`");
+                        writeln!(out, "  note: not proof it's unused; confirm with a text search, e.g. `rg -w {name}`")?;
                     }
                 }
             }
@@ -497,9 +528,9 @@ fn main() -> Result<()> {
             let sites = refs::sites(g, &idx, &targets, &only);
             let mut src = show::Source::new(&repo, rev);
             if cli.json {
-                print_json(&refs::json(g, &mut src, &targets, &sites));
+                print_json(out, &refs::json(g, &mut src, &targets, &sites))?;
             } else {
-                refs::print(g, &mut src, &targets, &sites);
+                refs::print(out, g, &mut src, &targets, &sites)?;
             }
         }
         Cmd::Show { targets, max_lines, no_line_numbers, callees, limit } => {
@@ -519,9 +550,9 @@ fn main() -> Result<()> {
             let opts = show::Options { max_lines, line_numbers: !no_line_numbers, callees };
             let mut src = show::Source::new(&repo, rev);
             if cli.json {
-                print_json(&show::json(&s.graph, &mut src, &picked, &opts));
+                print_json(out, &show::json(&s.graph, &mut src, &picked, &opts))?;
             } else {
-                show::print(&s.graph, &mut src, &picked, &opts);
+                show::print(out, &s.graph, &mut src, &picked, &opts)?;
             }
         }
         Cmd::Outline { targets, depth, limit } => {
@@ -540,39 +571,40 @@ fn main() -> Result<()> {
             let opts = outline::Options { depth };
             let mut src = show::Source::new(&repo, rev);
             if cli.json {
-                print_json(&outline::json(&s.graph, &mut src, &sections, &opts));
+                print_json(out, &outline::json(&s.graph, &mut src, &sections, &opts))?;
             } else {
-                outline::print(&s.graph, &mut src, &sections, &opts);
+                outline::print(out, &s.graph, &mut src, &sections, &opts)?;
             }
         }
         Cmd::Context { query, symbols } => {
             let s = snapshot(&repo, &store, rev, false)?;
             let idx = query::Index::new(&s.graph);
-            print!("{}", query::context(&s.graph, &idx, &query.join(" "), symbols));
+            write!(out, "{}", query::context(&s.graph, &idx, &query.join(" "), symbols))?;
         }
         Cmd::Diff { from, to } => {
             let a = snapshot::for_rev(&repo, &store, &from, false)?;
             let b = snapshot(&repo, &store, to.as_deref(), false)?;
             let d = query::diff(&a.graph, &b.graph);
             if cli.json {
-                print_json(&d);
+                print_json(out, &d)?;
             } else {
-                println!("{}  ->  {}", a.label, b.label);
+                writeln!(out, "{}  ->  {}", a.label, b.label)?;
                 for (key, sign) in [("symbols_added", "+"), ("symbols_removed", "-")] {
                     for v in d[key].as_array().unwrap() {
-                        println!("{sign} {:<9} {:<40} {}", v["kind"].as_str().unwrap(), v["symbol"].as_str().unwrap(), v["at"].as_str().unwrap());
+                        writeln!(out, "{sign} {:<9} {:<40} {}", v["kind"].as_str().unwrap(), v["symbol"].as_str().unwrap(), v["at"].as_str().unwrap())?;
                     }
                 }
                 for (key, sign) in [("calls_added", "+"), ("calls_removed", "-")] {
                     for v in d[key].as_array().unwrap() {
-                        println!("{sign} call  {}  ->  {}", v["from"].as_str().unwrap(), v["to"].as_str().unwrap());
+                        writeln!(out, "{sign} call  {}  ->  {}", v["from"].as_str().unwrap(), v["to"].as_str().unwrap())?;
                     }
                 }
             }
         }
         Cmd::Export => {
             let s = snapshot(&repo, &store, rev, false)?;
-            println!("{}", serde_json::to_string(&query::export(&s.graph))?);
+            serde_json::to_writer(&mut *out, &query::export(&s.graph))?;
+            writeln!(out)?;
         }
         Cmd::Html { symbol, output, open } => {
             let s = snapshot(&repo, &store, rev, false)?;
@@ -586,21 +618,21 @@ fn main() -> Result<()> {
             let frag = symbol.map(|sym| format!("#focus={}", sym.replace('%', "%25").replace(' ', "%20").replace('#', "%23"))).unwrap_or_default();
             let shown = path.display().to_string();
             let shown = shown.strip_prefix(r"\\?\").unwrap_or(&shown).replace('\\', "/");
-            println!("wrote {} ({:.0} KiB)", path.display(), std::fs::metadata(&path)?.len() as f64 / 1024.0);
-            println!("file://{}{}{frag}", if shown.starts_with('/') { "" } else { "/" }, shown);
+            writeln!(out, "wrote {} ({:.0} KiB)", path.display(), std::fs::metadata(&path)?.len() as f64 / 1024.0)?;
+            writeln!(out, "file://{}{}{frag}", if shown.starts_with('/') { "" } else { "/" }, shown)?;
             if open {
                 html::open(&path);
             }
         }
-        Cmd::Hooks { action, force } => git_hooks::run(&repo, action == "install", force)?,
+        Cmd::Hooks { action, force } => git_hooks::run(out, &repo, action == "install", force)?,
         Cmd::Facts { .. } | Cmd::Upgrade { .. } => unreachable!(),
         Cmd::Install { target, force, .. } | Cmd::Uninstall { target, force, .. } => {
             debug_assert!(target == Target::GitHooks);
-            git_hooks::run(&repo, matches!(cli.cmd, Cmd::Install { .. }), force)?
+            git_hooks::run(out, &repo, matches!(cli.cmd, Cmd::Install { .. }), force)?
         }
         Cmd::Clear => {
             store.clear()?;
-            println!("cleared {}", store.shared.parent().unwrap().display());
+            writeln!(out, "cleared {}", store.shared.parent().unwrap().display())?;
         }
     }
     Ok(())
