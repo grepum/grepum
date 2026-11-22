@@ -205,12 +205,53 @@ On excalidraw, 74 of the "wrong" links are components wrapped in `memo` or
 `forwardRef` that tsc reports as variables rather than functions.
 `benchmark/ts/run.sh` reproduces this.
 
+### Compared with plain grep
+
+What an agent reads to answer common questions, with grepum and the way it
+works without it: `git grep -n -w <name>` (the same matches and output as
+`rg -n -w`), then reading the files it found, whole (as a file-read tool does,
+up to 2,000 lines). 50 sampled questions per repo, about functions picked at
+random; tokens are estimated as bytes / 4 on both sides, and file reads are
+counted without the line numbers a read tool adds, which favours grep.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="benchmark/charts/vs-grep-tokens-dark.svg">
+  <img alt="Tokens per question, grepum vs grep and reading files, on five real repos: who calls X 1.4-8.3x fewer; who calls X with their code 7-159x fewer; read one function 61-191x fewer; what's in this file 5-11x fewer" src="benchmark/charts/vs-grep-tokens-light.svg" width="840">
+</picture>
+
+- **Read one function**: `grepum show` costs 64-90 tokens; finding it with
+  grep and reading its file costs 4.3k-16k. Even a careful agent that reads
+  only 60 lines from the definition spends 5-19x more than `show`, and on fzf
+  misses the end of 8% of functions.
+- **Who calls X, with their code**: `grepum callers X | grepum show -` versus
+  grep plus reading every file it hit: 7-159x fewer tokens, and 1 tool call
+  instead of a median 3-10.
+- **What's in this file**: `grepum outline` is 5-11x smaller than the file.
+- **Who calls X** (the list alone) is closest: grep's output is short when a
+  name is rare. The difference is in what the answer means:
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="benchmark/charts/vs-grep-accuracy-dark.svg">
+  <img alt="Who calls X, checked against the true callers. Recall: grepum 100% on the synthetic projects and 88.8% on hono; grep 94.7-100% and 98.8%. Precision: grepum 97.3-100%, grep 3.6-26.9%" src="benchmark/charts/vs-grep-accuracy-light.svg" width="840">
+</picture>
+
+grep's answer here is the function around each matching line, after dropping
+definitions, imports and comments. It finds nearly every caller, because
+calls are spelled with the name, but most of what it returns isn't one:
+other types' methods of the same name, variables, strings. Telling them apart
+means reading the code, which is the token cost above. grepum's list is
+almost all real callers; on hono it misses 11% that the compiler sees,
+mostly calls on values typed only by context (`(c) => c.get(...)`). A name
+search can't miss those, so for a rename, check grepum's answer with grep. A
+single grep call is faster (8-15 ms against grepum's 23-39 ms).
+
 ### Running it
 
 ```
 cargo build --release
 python3 benchmark/generate.py   # writes the synthetic projects + ground truth (not committed)
 python3 benchmark/bench.py --graphify $(which graphify)   # --set synthetic|real|all
+python3 benchmark/vs_grep.py    # grepum vs grep (hono's callers are scored if benchmark/ts/run.sh ran first)
 python3 benchmark/charts.py     # redraws the charts above
 ```
 

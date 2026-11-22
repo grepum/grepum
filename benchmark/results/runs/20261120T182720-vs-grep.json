@@ -1,0 +1,659 @@
+{
+ "meta": {
+  "date": "2026-11-20T18:27:20Z",
+  "machine": "Apple M2 Max, Darwin 25.5.0",
+  "grepum": "0.5.0",
+  "commit": "1086c38",
+  "graphify": "unknown",
+  "reps": 1,
+  "sample": 50,
+  "seed": 1,
+  "baseline": "git version 2.40.1",
+  "tokens": "bytes / 4",
+  "tsc": [
+   "hono"
+  ]
+ },
+ "results": {
+  "shopfront": {
+   "lang": "TypeScript",
+   "callers": {
+    "grepum": {
+     "tokens": 30.5,
+     "tokens_total": 1794,
+     "code_tokens": 200.0,
+     "code_tokens_total": 11824,
+     "calls": 1.0,
+     "calls_total": 50,
+     "code_calls": 1.0,
+     "code_calls_total": 50,
+     "ms": 23.57929153367877
+    },
+    "grep": {
+     "tokens": 1240.0,
+     "tokens_total": 70625,
+     "code_tokens": 21414.0,
+     "code_tokens_total": 699824,
+     "calls": 1.0,
+     "calls_total": 50,
+     "code_calls": 81.0,
+     "code_calls_total": 2509,
+     "ms": 9.048416977748275
+    },
+    "n": 50,
+    "accuracy": {
+     "grepum": {
+      "recall": 1.0,
+      "precision": 1.0,
+      "recall_per_question": 1.0,
+      "precision_per_question": 1.0,
+      "tp": 73,
+      "fp": 0,
+      "fn": 0
+     },
+     "grep": {
+      "recall": 1.0,
+      "precision": 0.03587223587223587,
+      "recall_per_question": 1.0,
+      "precision_per_question": 0.3849669421487603,
+      "tp": 73,
+      "fp": 1962,
+      "fn": 0
+     }
+    }
+   },
+   "show": {
+    "grepum": {
+     "tokens": 63.5,
+     "tokens_total": 3634,
+     "complete": 1.0,
+     "calls": 1.0,
+     "calls_total": 50,
+     "ms": 23.50902045145631
+    },
+    "grep": {
+     "tokens": 1264.5,
+     "tokens_total": 59420,
+     "complete": 1.0,
+     "calls": 2.0,
+     "calls_total": 100,
+     "ms": 8.901916444301605
+    },
+    "grep_window": {
+     "tokens": 808.0,
+     "tokens_total": 49200,
+     "complete": 1.0,
+     "calls": 2.0,
+     "calls_total": 100
+    },
+    "n": 50
+   },
+   "outline": {
+    "grepum": {
+     "tokens": 82.0,
+     "tokens_total": 4143,
+     "calls": 1.0,
+     "calls_total": 50,
+     "ms": 23.430958506651223
+    },
+    "grep": {
+     "tokens": 191.0,
+     "tokens_total": 10372,
+     "calls": 1.0,
+     "calls_total": 50
+    },
+    "n": 50
+   }
+  },
+  "datapipe": {
+   "lang": "Python",
+   "callers": {
+    "grepum": {
+     "tokens": 30.0,
+     "tokens_total": 3599,
+     "code_tokens": 144.5,
+     "code_tokens_total": 20648,
+     "calls": 1.0,
+     "calls_total": 50,
+     "code_calls": 1.0,
+     "code_calls_total": 50,
+     "ms": 22.835479117929935
+    },
+    "grep": {
+     "tokens": 399.0,
+     "tokens_total": 58880,
+     "code_tokens": 1970.0,
+     "code_tokens_total": 517811,
+     "calls": 1.0,
+     "calls_total": 50,
+     "code_calls": 11.0,
+     "code_calls_total": 2636,
+     "ms": 8.674749988131225
+    },
+    "n": 50,
+    "accuracy": {
+     "grepum": {
+      "recall": 1.0,
+      "precision": 1.0,
+      "recall_per_question": 1.0,
+      "precision_per_question": 1.0,
+      "tp": 202,
+      "fp": 0,
+      "fn": 0
+     },
+     "grep": {
+      "recall": 1.0,
+      "precision": 0.11002178649237472,
+      "recall_per_question": 1.0,
+      "precision_per_question": 0.5453848342580737,
+      "tp": 202,
+      "fp": 1634,
+      "fn": 0
+     }
+    }
+   },
+   "show": {
+    "grepum": {
+     "tokens": 51.5,
+     "tokens_total": 2861,
+     "complete": 1.0,
+     "calls": 1.0,
+     "calls_total": 50,
+     "ms": 22.957770386710763
+    },
+    "grep": {
+     "tokens": 2259.0,
+     "tokens_total": 108142,
+     "complete": 1.0,
+     "calls": 2.0,
+     "calls_total": 100,
+     "ms": 8.5527915507555
+    },
+    "grep_window": {
+     "tokens": 2165.0,
+     "tokens_total": 104141,
+     "complete": 1.0,
+     "calls": 2.0,
+     "calls_total": 100
+    },
+    "n": 50
+   },
+   "outline": {
+    "grepum": {
+     "tokens": 84.0,
+     "tokens_total": 3971,
+     "calls": 1.0,
+     "calls_total": 50,
+     "ms": 22.89020805619657
+    },
+    "grep": {
+     "tokens": 152.0,
+     "tokens_total": 8276,
+     "calls": 1.0,
+     "calls_total": 50
+    },
+    "n": 50
+   }
+  },
+  "arena": {
+   "lang": "UE5 C++",
+   "callers": {
+    "grepum": {
+     "tokens": 37.0,
+     "tokens_total": 4826,
+     "code_tokens": 179.0,
+     "code_tokens_total": 22612,
+     "calls": 1.0,
+     "calls_total": 50,
+     "code_calls": 1.0,
+     "code_calls_total": 50,
+     "ms": 22.754271514713764
+    },
+    "grep": {
+     "tokens": 868.0,
+     "tokens_total": 55319,
+     "code_tokens": 6276.0,
+     "code_tokens_total": 333894,
+     "calls": 1.0,
+     "calls_total": 50,
+     "code_calls": 41.0,
+     "code_calls_total": 1844,
+     "ms": 8.3137295441702
+    },
+    "n": 50,
+    "accuracy": {
+     "grepum": {
+      "recall": 1.0,
+      "precision": 1.0,
+      "recall_per_question": 1.0,
+      "precision_per_question": 1.0,
+      "tp": 228,
+      "fp": 0,
+      "fn": 0
+     },
+     "grep": {
+      "recall": 0.9473684210526315,
+      "precision": 0.26865671641791045,
+      "recall_per_question": 0.76,
+      "precision_per_question": 0.32105263157894737,
+      "tp": 216,
+      "fp": 588,
+      "fn": 12
+     }
+    }
+   },
+   "show": {
+    "grepum": {
+     "tokens": 70.0,
+     "tokens_total": 3539,
+     "complete": 1.0,
+     "calls": 1.0,
+     "calls_total": 50,
+     "ms": 23.153270478360355
+    },
+    "grep": {
+     "tokens": 1089.5,
+     "tokens_total": 59731,
+     "complete": 1.0,
+     "calls": 2.0,
+     "calls_total": 100,
+     "ms": 8.408499998040497
+    },
+    "grep_window": {
+     "tokens": 1054.0,
+     "tokens_total": 54916,
+     "complete": 1.0,
+     "calls": 2.0,
+     "calls_total": 100
+    },
+    "n": 50
+   },
+   "outline": {
+    "grepum": {
+     "tokens": 52.0,
+     "tokens_total": 2964,
+     "calls": 1.0,
+     "calls_total": 50,
+     "ms": 22.751667071133852
+    },
+    "grep": {
+     "tokens": 109.0,
+     "tokens_total": 6530,
+     "calls": 1.0,
+     "calls_total": 50
+    },
+    "n": 50
+   }
+  },
+  "flask": {
+   "lang": "Python",
+   "callers": {
+    "grepum": {
+     "tokens": 43.0,
+     "tokens_total": 2429,
+     "code_tokens": 85.5,
+     "code_tokens_total": 15118,
+     "calls": 1.0,
+     "calls_total": 50,
+     "code_calls": 1.0,
+     "code_calls_total": 50,
+     "ms": 31.726624933071434
+    },
+    "grep": {
+     "tokens": 60.0,
+     "tokens_total": 54758,
+     "code_tokens": 13552.5,
+     "code_tokens_total": 2127455,
+     "calls": 1.0,
+     "calls_total": 50,
+     "code_calls": 3.5,
+     "code_calls_total": 719,
+     "ms": 9.51329164672643
+    },
+    "n": 50
+   },
+   "show": {
+    "grepum": {
+     "tokens": 69.5,
+     "tokens_total": 6340,
+     "complete": 1.0,
+     "calls": 1.0,
+     "calls_total": 50,
+     "ms": 32.63335453812033
+    },
+    "grep": {
+     "tokens": 5713.5,
+     "tokens_total": 332079,
+     "complete": 1.0,
+     "calls": 2.0,
+     "calls_total": 100,
+     "ms": 9.474104037508368
+    },
+    "grep_window": {
+     "tokens": 589.0,
+     "tokens_total": 136496,
+     "complete": 1.0,
+     "calls": 2.0,
+     "calls_total": 100
+    },
+    "n": 50
+   },
+   "outline": {
+    "grepum": {
+     "tokens": 165.5,
+     "tokens_total": 14723,
+     "calls": 1.0,
+     "calls_total": 50,
+     "ms": 31.418896047398448
+    },
+    "grep": {
+     "tokens": 1230.5,
+     "tokens_total": 123480,
+     "calls": 1.0,
+     "calls_total": 50
+    },
+    "n": 50
+   }
+  },
+  "hono": {
+   "lang": "TypeScript",
+   "callers": {
+    "grepum": {
+     "tokens": 33.5,
+     "tokens_total": 2237,
+     "code_tokens": 944.0,
+     "code_tokens_total": 52940,
+     "calls": 1.0,
+     "calls_total": 50,
+     "code_calls": 1.0,
+     "code_calls_total": 50,
+     "ms": 27.472291490994394
+    },
+    "grep": {
+     "tokens": 226.0,
+     "tokens_total": 279758,
+     "code_tokens": 6885.0,
+     "code_tokens_total": 3206089,
+     "calls": 1.0,
+     "calls_total": 50,
+     "code_calls": 3.5,
+     "code_calls_total": 1083,
+     "ms": 15.254145488142967
+    },
+    "n": 50,
+    "accuracy": {
+     "grepum": {
+      "recall": 0.8875,
+      "precision": 0.9726027397260274,
+      "recall_per_question": 0.8886666666666667,
+      "precision_per_question": 0.9855072463768116,
+      "tp": 71,
+      "fp": 2,
+      "fn": 9
+     },
+     "grep": {
+      "recall": 0.9875,
+      "precision": 0.24610591900311526,
+      "recall_per_question": 0.99,
+      "precision_per_question": 0.6902089027132189,
+      "tp": 79,
+      "fp": 242,
+      "fn": 1
+     }
+    }
+   },
+   "show": {
+    "grepum": {
+     "tokens": 79.0,
+     "tokens_total": 4681,
+     "complete": 1.0,
+     "calls": 1.0,
+     "calls_total": 50,
+     "ms": 28.42145855538547
+    },
+    "grep": {
+     "tokens": 6271.0,
+     "tokens_total": 481014,
+     "complete": 1.0,
+     "calls": 2.0,
+     "calls_total": 100,
+     "ms": 14.988541486673057
+    },
+    "grep_window": {
+     "tokens": 1209.0,
+     "tokens_total": 209079,
+     "complete": 1.0,
+     "calls": 2.0,
+     "calls_total": 100
+    },
+    "n": 50
+   },
+   "outline": {
+    "grepum": {
+     "tokens": 64.0,
+     "tokens_total": 8117,
+     "calls": 1.0,
+     "calls_total": 50,
+     "ms": 27.097999933175743
+    },
+    "grep": {
+     "tokens": 419.0,
+     "tokens_total": 58739,
+     "calls": 1.0,
+     "calls_total": 50
+    },
+    "n": 50
+   }
+  },
+  "ripgrep": {
+   "lang": "Rust",
+   "callers": {
+    "grepum": {
+     "tokens": 40.0,
+     "tokens_total": 2091,
+     "code_tokens": 165.5,
+     "code_tokens_total": 25085,
+     "calls": 1.0,
+     "calls_total": 50,
+     "code_calls": 1.0,
+     "code_calls_total": 50,
+     "ms": 35.70437501184642
+    },
+    "grep": {
+     "tokens": 236.5,
+     "tokens_total": 78142,
+     "code_tokens": 23594.0,
+     "code_tokens_total": 2147541,
+     "calls": 1.0,
+     "calls_total": 50,
+     "code_calls": 3.5,
+     "code_calls_total": 377,
+     "ms": 9.549354552291334
+    },
+    "n": 50
+   },
+   "show": {
+    "grepum": {
+     "tokens": 84.0,
+     "tokens_total": 8213,
+     "complete": 1.0,
+     "calls": 1.0,
+     "calls_total": 50,
+     "ms": 38.05564600042999
+    },
+    "grep": {
+     "tokens": 16051.5,
+     "tokens_total": 753654,
+     "complete": 1.0,
+     "calls": 2.0,
+     "calls_total": 100,
+     "ms": 9.342458564788103
+    },
+    "grep_window": {
+     "tokens": 1606.5,
+     "tokens_total": 194743,
+     "complete": 1.0,
+     "calls": 2.0,
+     "calls_total": 100
+    },
+    "n": 50
+   },
+   "outline": {
+    "grepum": {
+     "tokens": 233.5,
+     "tokens_total": 39814,
+     "calls": 1.0,
+     "calls_total": 50,
+     "ms": 35.9086460666731
+    },
+    "grep": {
+     "tokens": 2648.5,
+     "tokens_total": 212925,
+     "calls": 1.0,
+     "calls_total": 50
+    },
+    "n": 50
+   }
+  },
+  "fzf": {
+   "lang": "Go",
+   "callers": {
+    "grepum": {
+     "tokens": 35.0,
+     "tokens_total": 1875,
+     "code_tokens": 616.5,
+     "code_tokens_total": 67546,
+     "calls": 1.0,
+     "calls_total": 50,
+     "code_calls": 1.0,
+     "code_calls_total": 50,
+     "ms": 30.74093791656196
+    },
+    "grep": {
+     "tokens": 82.0,
+     "tokens_total": 8483,
+     "code_tokens": 14553.0,
+     "code_tokens_total": 1445286,
+     "calls": 1.0,
+     "calls_total": 50,
+     "code_calls": 3.0,
+     "code_calls_total": 275,
+     "ms": 8.48412502091378
+    },
+    "n": 50
+   },
+   "show": {
+    "grepum": {
+     "tokens": 90.0,
+     "tokens_total": 10325,
+     "complete": 0.98,
+     "calls": 1.0,
+     "calls_total": 50,
+     "ms": 32.715354464016855
+    },
+    "grep": {
+     "tokens": 5513.0,
+     "tokens_total": 356458,
+     "complete": 1.0,
+     "calls": 2.0,
+     "calls_total": 100,
+     "ms": 8.345603942871094
+    },
+    "grep_window": {
+     "tokens": 493.0,
+     "tokens_total": 26815,
+     "complete": 0.92,
+     "calls": 2.0,
+     "calls_total": 100
+    },
+    "n": 50
+   },
+   "outline": {
+    "grepum": {
+     "tokens": 78.0,
+     "tokens_total": 12582,
+     "calls": 1.0,
+     "calls_total": 50,
+     "ms": 30.53162491414696
+    },
+    "grep": {
+     "tokens": 840.0,
+     "tokens_total": 102866,
+     "calls": 1.0,
+     "calls_total": 50
+    },
+    "n": 50
+   }
+  },
+  "leveldb": {
+   "lang": "C++",
+   "callers": {
+    "grepum": {
+     "tokens": 45.0,
+     "tokens_total": 4280,
+     "code_tokens": 395.5,
+     "code_tokens_total": 53824,
+     "calls": 1.0,
+     "calls_total": 50,
+     "code_calls": 1.0,
+     "code_calls_total": 50,
+     "ms": 28.507938026450574
+    },
+    "grep": {
+     "tokens": 375.5,
+     "tokens_total": 55000,
+     "code_tokens": 32807.0,
+     "code_tokens_total": 1998507,
+     "calls": 1.0,
+     "calls_total": 50,
+     "code_calls": 10.5,
+     "code_calls_total": 610,
+     "ms": 8.287228993140161
+    },
+    "n": 50
+   },
+   "show": {
+    "grepum": {
+     "tokens": 64.5,
+     "tokens_total": 6017,
+     "complete": 1.0,
+     "calls": 1.0,
+     "calls_total": 50,
+     "ms": 29.19889602344483
+    },
+    "grep": {
+     "tokens": 4319.5,
+     "tokens_total": 280493,
+     "complete": 1.0,
+     "calls": 2.0,
+     "calls_total": 100,
+     "ms": 8.154187351465225
+    },
+    "grep_window": {
+     "tokens": 723.0,
+     "tokens_total": 63470,
+     "complete": 0.98,
+     "calls": 2.0,
+     "calls_total": 100
+    },
+    "n": 50
+   },
+   "outline": {
+    "grepum": {
+     "tokens": 191.5,
+     "tokens_total": 21380,
+     "calls": 1.0,
+     "calls_total": 50,
+     "ms": 28.400645940564573
+    },
+    "grep": {
+     "tokens": 1028.0,
+     "tokens_total": 99258,
+     "calls": 1.0,
+     "calls_total": 50
+    },
+    "n": 50
+   }
+  }
+ }
+}

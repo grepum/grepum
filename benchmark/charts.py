@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Render the README benchmark charts from benchmark/results/{synthetic,real}.json.
+"""Render the README benchmark charts from benchmark/results/{synthetic,real,vs-grep}.json.
 
     python3 benchmark/charts.py      # writes benchmark/charts/*-{light,dark}.svg
 
@@ -72,24 +72,32 @@ class Svg:
                 + "".join(self.parts) + "</svg>\n")
 
 
-def header(svg, title, subtitle):
+def fmt_tokens(n):
+    return f"{n:.0f}" if n < 1000 else f"{n / 1000:.1f}k"
+
+
+def header(svg, title, subtitle, tools=TOOLS):
     svg.text(24, 34, title, size=17, weight=600)
     svg.text(24, 56, subtitle, size=13, fill="ink2")
     # legend: swatch + name, text in ink (never the series color)
     x = 24
-    for i, (_, name) in enumerate(TOOLS):
+    for i, (_, name) in enumerate(tools):
         svg.raw(f'<rect x="{x}" y="72" width="12" height="12" rx="3" fill="{svg.t["series"][i]}"/>')
         svg.text(x + 18, 82.5, name, size=13)
         x += 18 + 8 * len(name) + 28
     return 104
 
 
-def panel(svg, x, y, width, title, projects, values, fmt, note):
-    """One small multiple: projects × (grepum, graphify) horizontal bars on a shared scale.
+def panel(svg, x, y, width, title, projects, values, fmt, note, caption=None):
+    """One small multiple: projects × (grepum, other tool) horizontal bars on a shared scale.
 
-    values[p] = (grepum, graphify); note(p) -> annotation after grepum's value, or None.
+    values[p] = (grepum, other); note(p) -> annotation after grepum's value, or None.
+    caption: a muted line under the title saying what each bar measures.
     """
     svg.text(x, y + 14, title, size=14, weight=600)
+    if caption:
+        svg.text(x, y + 31, caption, size=12, fill="muted")
+        y += 17
     label_w = 92
     x0 = x + label_w
     # leave room after the longest bar for its value label
@@ -156,6 +164,51 @@ def accuracy_chart(data, theme, projects=SYNTHETIC):
     return svg.render("grepum vs graphify: call-edge recall and precision")
 
 
+GREP_TOOLS = [("grepum", "grepum"), ("grep", "grep and reading files, without grepum")]
+
+
+def vs_grep_tokens_chart(data, theme, projects):
+    W = 840
+    svg = Svg(W, theme)
+    y = header(svg, "Tokens an agent reads to answer: grepum vs grep",
+               "Median per question, 50 sampled questions per repo. Tokens ≈ bytes / 4. Shorter is better.", GREP_TOOLS)
+    col_w = (W - 48 - 32) / 2
+    panels = [
+        ("Who calls X?", "callers", "tokens", "grepum callers  vs  git grep -n -w X"),
+        ("Who calls X, with their code", "callers", "code_tokens", "callers | show -  vs  git grep, then read each file hit"),
+        ("Read one function", "show", "tokens", "grepum show  vs  git grep, then read its file"),
+        ("What's in this file?", "outline", "tokens", "grepum outline  vs  reading the file"),
+    ]
+    row_bottom = y
+    for k, (title, q, key, caption) in enumerate(panels):
+        px = 24 + (k % 2) * (col_w + 32)
+        if k % 2 == 0:
+            y = row_bottom + (16 if k else 0)
+        values = {p: (data[p][q]["grepum"][key], data[p][q]["grep"][key]) for p, _ in projects}
+        b = panel(svg, px, y, col_w, title, projects, values, fmt_tokens,
+                  lambda p, v=values: f"{fmt_ratio(v[p][1] / v[p][0])} fewer" if v[p][0] else None, caption)
+        row_bottom = max(row_bottom, b)
+    svg.h = int(row_bottom + 14)
+    return svg.render("grepum vs grep: tokens read per question")
+
+
+def vs_grep_accuracy_chart(data, theme, projects):
+    W = 840
+    svg = Svg(W, theme)
+    tools = [("grepum", "grepum callers"), ("grep", "grep (function around each match)")]
+    y = header(svg, "Who calls X? Answers checked against the true callers",
+               "Synthetic projects: the generator's call graph. hono: the TypeScript compiler. Longer is better.", tools)
+    col_w = (W - 48 - 32) / 2
+    bottom = y
+    for k, (title, key) in enumerate([("Recall: true callers found", "recall"), ("Precision: answers that are true callers", "precision")]):
+        px = 24 + k * (col_w + 32)
+        values = {p: tuple(data[p]["callers"]["accuracy"][t][key] for t, _ in tools) for p, _ in projects}
+        b = panel(svg, px, y, col_w, title, projects, values, lambda v: f"{v * 100:.1f}%", lambda p: None)
+        bottom = max(bottom, b)
+    svg.h = int(bottom + 14)
+    return svg.render("grepum vs grep: who-calls recall and precision")
+
+
 def latest_meta(set_name):
     runs = sorted((RESULTS / "runs").glob(f"*-{set_name}.json"))
     return json.loads(runs[-1].read_text())["meta"] if runs else {}
@@ -187,6 +240,16 @@ def main():
             (OUT / f"real-speed-{theme}.svg").write_text(
                 speed_chart(data, theme, projects, "Real repositories: speed and disk", sub))
             written += 1
+    vs_path = RESULTS / "vs-grep.json"
+    if vs_path.exists():
+        data = json.loads(vs_path.read_text())
+        real = [p for p in REAL if p[0] in data]
+        scored = [p for p in SYNTHETIC + [("hono", "TypeScript")] if p[0] in data and "accuracy" in data[p[0]]["callers"]]
+        scored = [(n, "TS, vs tsc" if n == "hono" else lang) for n, lang in scored]
+        for theme in THEMES:
+            (OUT / f"vs-grep-tokens-{theme}.svg").write_text(vs_grep_tokens_chart(data, theme, real))
+            (OUT / f"vs-grep-accuracy-{theme}.svg").write_text(vs_grep_accuracy_chart(data, theme, scored))
+            written += 2
     print(f"wrote {written} charts to {OUT.relative_to(ROOT)}/")
 
 
